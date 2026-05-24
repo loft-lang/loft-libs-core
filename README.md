@@ -20,7 +20,7 @@ Per the chunked-repo design in
 |---|---|---|
 | [`crypto/`](crypto/) | `crypto` — SHA-256, HMAC, base64 | v0.1.0 (extracted 2026-05-24) |
 | [`arguments/`](arguments/) | `arguments` — CLI argument parsing | v0.1.0 (extracted 2026-05-24) |
-| `random/` | `random` — PRNG | Pending — incomplete drain.  `src/codegen_runtime.rs` still carries the `n_rand*` impls because native codegen dispatches via the RuntimeFn registry, not via extension-cdylib link.  Drain blocked until native codegen learns cdylib dispatch (phase 2.5/3 work). |
+| [`random/`](random/) | `random` — PRNG | v0.1.0 (extracted 2026-05-24, **showcase drain**: the LoftStore-forwarding codegen feature in loft 0.8.5+ ships here as its canonical example) |
 
 Future drains from the loft stdlib (Phase 3.6 in
 [plan-12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md#phase-36--stdlib-drain-into-libs))
