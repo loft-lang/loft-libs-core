@@ -1,0 +1,8 @@
+# Cargo build artefacts per-package
+*/native/target/
+
+# loft package output tarballs (per-package, regenerated on `loft package`)
+*.tar.gz
+
+# macOS Finder cruft
+.DS_Store
