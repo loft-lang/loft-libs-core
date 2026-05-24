@@ -29,6 +29,8 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 [[package]]
 name = "loft-ffi"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91b7969b1cfedfd9c7c44a0793ff6b349f5993cb69ea48fe1bc2868224007808"
 
 [[package]]
 name = "loft-random"
