@@ -8,6 +8,6 @@ license = "LGPL-3.0-or-later"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-loft-ffi = { path = "../../../../loft/loft-ffi" }
+loft-ffi = "0.1"
 rand_core = { version = "0.9", features = ["os_rng"] }
 rand_pcg = "0.9"

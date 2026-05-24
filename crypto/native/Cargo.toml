@@ -8,7 +8,7 @@ license = "LGPL-3.0-or-later"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-loft-ffi = { path = "../../../loft/loft-ffi" }
+loft-ffi = "0.1"
 
 [build-dependencies]
-loft-ffi-build = { path = "../../../loft/loft-ffi-build" }
+loft-ffi-build = "0.1"
