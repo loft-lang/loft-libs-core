@@ -70,8 +70,9 @@ pub unsafe extern "C" fn n_rand_indices(mut store: LoftStore, n: i64) -> LoftRef
     vec
 }
 
-loft_ffi::loft_register! {
-    n_rand,
-    n_rand_seed,
-    n_rand_indices,
-}
+// @PLAN12 — the `loft_ffi::loft_register! { … }` list is generated from
+// the library's co-located `#native` annotations in `../src/*.loft` by
+// `build.rs` (via `loft-ffi-build::generate_register_from_loft`) and
+// `include!`d here, so adding a binding automatically registers it — no
+// hand-maintained list, no manifest table.
+include!(concat!(env!("OUT_DIR"), "/loft_register_gen.rs"));

@@ -11,4 +11,4 @@ crate-type = ["cdylib", "rlib"]
 loft-ffi = "0.1"
 
 [build-dependencies]
-loft-ffi-build = "0.1"
+loft-ffi-build = "0.2"
