@@ -1,14 +1,24 @@
-# PKG.REG library CI — canonical workflow shipped 2026-05-24 evening
-# as plan-12 Phase 6.5.  Every package in this chunk runs:
-#   1. loft test            — interpreter end-to-end
-#   2. loft --native test   — native codegen end-to-end
+# Canonical library-ci.yml — Phase 6.5 refresh (2026-05-29).
 #
-# Until a public loft binary release exists we build loft from
-# source on the runner.  The .cargo/config.toml in the loft repo
-# forces -fuse-ld=mold, so we apt-get mold first; without it, cc
-# can't find a linker and even the proc-macro2 build script fails.
+# Supersedes the 2026-05-24 draft.  Three improvements over the
+# previous version, all backed by the canonical template in
+# jjstwerff/loft (doc/claude/lib_plans/12-library-extraction/
+# library-ci.yml.example):
 #
-# Cached on the loft.git HEAD SHA so repeat runs reuse the binary.
+#   1. Cache key based on loft Cargo.lock SHA (was a static key, so
+#      the loft build cache never invalidated when upstream loft
+#      shipped).
+#   2. LOFT_DENY_WARNINGS=1 by default — warnings fail CI.  A package
+#      opts out temporarily by placing a `.allow_warnings` file at its
+#      root (visible in PRs; remove once cleaned up).
+#   3. Two new conditional steps:
+#        - Rust integration tests (Phase 6t Tier 2/3) — only fires
+#          when a package has `<pkg>/native/tests/*.rs`.
+#        - `loft test --deps` (Phase 6t Tier 4) — exercises declared
+#          path-form deps so a consumer-facing release fails CI here
+#          rather than at a downstream consumer's CI.
+#
+# Per-package matrix → one PR check per package on failure.
 
 name: library-ci
 
@@ -16,7 +26,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   test:
@@ -24,38 +33,64 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package:
-          - crypto
-          - arguments
-          - random
+        package: [arguments, random, crypto]
     steps:
       - uses: actions/checkout@v4
 
       - name: Install mold (loft's pinned linker)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mold
+        run: sudo apt-get update -y && sudo apt-get install -y mold
 
-      - name: Cache cargo registry
+      - name: Clone loft source
+        uses: actions/checkout@v4
+        with:
+          repository: jjstwerff/loft
+          path: loft-src
+
+      - name: Cache cargo registry + loft build
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ runner.os }}-loft-v1
+            loft-src/target
+          key: loft-${{ hashFiles('loft-src/Cargo.lock') }}
+          restore-keys: |
+            loft-
 
       - name: Build loft from source
+        working-directory: loft-src
         run: |
-          git clone --depth=1 https://github.com/jjstwerff/loft.git /tmp/loft
-          (cd /tmp/loft && cargo build --release --bin loft)
-
-      - name: Add loft to PATH
-        run: echo "/tmp/loft/target/release" >> "$GITHUB_PATH"
+          cargo build --release --bin loft
+          echo "$PWD/target/release" >> $GITHUB_PATH
 
       - name: Interpreter — loft test
         working-directory: ${{ matrix.package }}
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
         run: loft --interpret test
 
       - name: Native — loft --native test
         working-directory: ${{ matrix.package }}
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
         run: loft --native test
+
+      # Phase 6t Tier 2/3 home — only fires when the library carries
+      # Rust-side integration tests (graphics gold-image, multiplayer
+      # subprocess harnesses, etc.).  Libraries without native/tests/
+      # skip the step cleanly.
+      - name: Rust integration tests (if present)
+        working-directory: ${{ matrix.package }}/native
+        if: hashFiles(format('{0}/native/tests/*.rs', matrix.package)) != ''
+        run: cargo test --release
+
+      # Phase 6t Tier 4 — exercise the library's transitive deps.
+      # `loft test --deps` walks every dep declared in the package's
+      # loft.toml (path-form deps first; registry-version deps require
+      # a loft.lock and become a no-op until that's in place) and runs
+      # its tests against the just-built loft.  Catches "we shipped a
+      # graphics version that broke gridmesh's tests in our
+      # environment" before downstream consumers do.
+      - name: Transitive dep tests
+        working-directory: ${{ matrix.package }}
+        run: loft test --deps
