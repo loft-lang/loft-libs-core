@@ -20,7 +20,6 @@ crate = "loft-crypto"
 [native.functions]
 sha256_native = "n_sha256"
 hmac_sha256_native = "n_hmac_sha256"
-hmac_sha256_raw_native = "n_hmac_sha256_raw"
 base64_encode_native = "n_base64_encode"
 base64_decode_native = "n_base64_decode"
 base64url_encode_native = "n_base64url_encode"
