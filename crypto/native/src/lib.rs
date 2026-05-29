@@ -1,11 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Native crypto primitives for the `crypto` loft package.  Six `#native`
-//! symbols (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`,
-//! `n_base64_encode`, `n_base64_decode`, `n_base64url_encode`) bridge to
-//! zero-dependency pure-Rust SHA-256 / HMAC / base64 impls in `sha256.rs`
-//! and `base64.rs`.  Moved out of the loft compiler crate in plan-12
+//! Native crypto primitives for the `crypto` loft package.  Five `#native`
+//! symbols (`n_sha256`, `n_hmac_sha256`, `n_base64_encode`,
+//! `n_base64_decode`, `n_base64url_encode`) bridge to zero-dependency
+//! pure-Rust SHA-256 / HMAC / base64 impls in `sha256.rs` and `base64.rs`.
+//! `n_hmac_sha256_raw` was removed 2026-05-30 along with the loft-side
+//! `jwt_sign` it was the sole consumer of.  Moved out of the loft compiler crate in plan-12
 //! phase 1a (2026-05-23) to drain library code from `src/native.rs` and
 //! `src/codegen_runtime.rs`.
 //!
@@ -69,20 +70,6 @@ pub unsafe extern "C" fn n_hmac_sha256(
     let key = unsafe { cr_in(key_ptr, key_len) };
     let data = unsafe { cr_in(data_ptr, data_len) };
     cr_ret(cr_hex(&sha256::hmac_sha256(key, data)))
-}
-
-/// `#native "n_hmac_sha256_raw"` — raw (un-hexed) HMAC-SHA-256 bytes as text.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_hmac_sha256_raw(
-    key_ptr: *const u8,
-    key_len: usize,
-    data_ptr: *const u8,
-    data_len: usize,
-) -> LoftStr {
-    let key = unsafe { cr_in(key_ptr, key_len) };
-    let data = unsafe { cr_in(data_ptr, data_len) };
-    let mac = sha256::hmac_sha256(key, data);
-    cr_ret(String::from_utf8_lossy(&mac).into_owned())
 }
 
 /// `#native "n_base64_encode"` — standard base64 of `data`.

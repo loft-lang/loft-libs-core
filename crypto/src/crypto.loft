@@ -1,7 +1,14 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // --- Crypto ---
-// Cryptographic primitives: hashing, HMAC, base64, JWT.
+// Cryptographic primitives: hashing, HMAC, base64.
+//
+// JWT signing was removed 2026-05-30 — the previous `jwt_sign` was an
+// HS256-only proof-of-concept with no verify counterpart, no claim
+// helpers, no key-rotation support, no consumers in any loft library
+// or tool, and no tests.  When a real auth use case lands, JWT
+// belongs in a dedicated `lib/auth/` package with proper algorithm
+// coverage (RS256/ES256) and a full sign+verify+claim API.
 
 // --- Internal natives ---
 
@@ -14,8 +21,6 @@ fn base64_encode_native(data: text) -> text;
 fn base64_decode_native(data: text) -> text;
 
 fn base64url_encode_native(data: text) -> text;
-
-fn hmac_sha256_raw_native(key: text, data: text) -> text;
 
 // --- Public API ---
 
@@ -42,17 +47,4 @@ pub fn base64_decode(data: text) -> text {
 // Base64url encode (JWT-safe, no padding).
 pub fn base64url_encode(data: text) -> text {
   base64url_encode_native(data)
-}
-
-// The fixed JWT HS256 header, pre-encoded.
-JWT_HEADER = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
-
-// Sign a JWT with HS256. Returns the complete JWT string.
-pub fn jwt_sign(payload: text, secret: text) -> text {
-  header = JWT_HEADER;
-  body = base64url_encode_native(payload);
-  signing_input = header + "." + body;
-  sig_raw = hmac_sha256_raw_native(secret, signing_input);
-  sig = base64url_encode_native(sig_raw);
-  signing_input + "." + sig
 }

@@ -1,30 +1,187 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Tests for the `crypto` library.  Each test pins a known-correct
+// vector (computed offline via Python's `hashlib` / `hmac` / `base64`
+// stdlib) so a regression in the native impl surfaces immediately.
+// SHA-256 vectors target the FIPS 180-4 padding seam (55-, 56-,
+// 64-byte boundaries).  HMAC-SHA-256 covers empty inputs and the
+// >64-byte key path that triggers HMAC's hash-the-key fallback.
+// Base64 covers all three padding shapes (0/1/2 leftover bytes) per
+// RFC 4648 §10, and base64url verifies the `+`/`/` → `-`/`_`
+// substitution via a UTF-8 input that produces a `/` in standard
+// base64.
+
 use crypto;
 
-fn test_sha256() {
+// Helper: build a string of N copies of a single character.
+fn repeat(c: text, n: integer) -> text {
+  out = "";
+  for _ in 0..n { out += c; }
+  out
+}
+
+// ── SHA-256 ───────────────────────────────────────────────────────
+
+fn test_sha256_hello() {
   hash = crypto::sha256("hello");
-  assert(hash == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "sha256={hash}");
+  assert(hash == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+         "sha256(hello)={hash}");
 }
 
 fn test_sha256_empty() {
   hash = crypto::sha256("");
-  assert(hash == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha256 empty");
+  assert(hash == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+         "sha256(empty)");
 }
 
-fn test_hmac_sha256() {
+fn test_sha256_abc() {
+  // The canonical FIPS 180-4 example.
+  hash = crypto::sha256("abc");
+  assert(hash == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+         "sha256(abc)={hash}");
+}
+
+fn test_sha256_55_byte_boundary() {
+  // SHA-256's block is 64 bytes; the padding format reserves 9 bytes
+  // (1 byte 0x80 + 8 byte length).  55 bytes fits in a single block
+  // with the padding; 56 forces a second block.  This exercises the
+  // single-block path right at the edge.
+  hash = crypto::sha256(repeat("a", 55));
+  assert(hash == "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318",
+         "sha256(55*a)={hash}");
+}
+
+fn test_sha256_56_byte_boundary() {
+  // 56-byte input forces the second padding block.  A bug in the
+  // padding seam typically shows here.
+  hash = crypto::sha256(repeat("a", 56));
+  assert(hash == "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a",
+         "sha256(56*a)={hash}");
+}
+
+fn test_sha256_64_byte_boundary() {
+  // Exactly one block — also forces a second padding block.
+  hash = crypto::sha256(repeat("a", 64));
+  assert(hash == "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
+         "sha256(64*a)={hash}");
+}
+
+fn test_sha256_multi_block() {
+  // 100 bytes — two-block compress, the common production path.
+  hash = crypto::sha256(repeat("a", 100));
+  assert(hash == "2816597888e4a0d3a36b82b83316ab32680eb8f00f8cd3b904d681246d285a0e",
+         "sha256(100*a)={hash}");
+}
+
+// ── HMAC-SHA-256 ──────────────────────────────────────────────────
+
+fn test_hmac_sha256_quick_brown_fox() {
+  // The canonical test vector.
   mac = crypto::hmac_sha256("key", "The quick brown fox jumps over the lazy dog");
-  assert(mac == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8", "hmac");
+  assert(mac == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
+         "hmac(key,fox)={mac}");
 }
 
-fn test_base64_roundtrip() {
+fn test_hmac_sha256_empty_empty() {
+  // Empty key + empty data — well-defined fixed-point.
+  mac = crypto::hmac_sha256("", "");
+  assert(mac == "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad",
+         "hmac(empty,empty)={mac}");
+}
+
+fn test_hmac_sha256_empty_data() {
+  mac = crypto::hmac_sha256("key", "");
+  assert(mac == "5d5d139563c95b5967b9bd9a8c9b233a9dedb45072794cd232dc1b74832607d0",
+         "hmac(key,empty)={mac}");
+}
+
+fn test_hmac_sha256_empty_key() {
+  mac = crypto::hmac_sha256("", "Hello");
+  assert(mac == "b4d6720e5dbca77f5108a6e2e9c4d0a77a732f64244bdfdf01a3ede8ff933e00",
+         "hmac(empty,Hello)={mac}");
+}
+
+fn test_hmac_sha256_long_key() {
+  // HMAC's spec: if key longer than block size (64 bytes), hash it
+  // first.  A 100-byte key exercises that hash-the-key branch — a
+  // common impl bug is to use the raw long key directly, which gives
+  // wrong output that won't match any HMAC verifier.
+  mac = crypto::hmac_sha256(repeat("a", 100), "data");
+  assert(mac == "e14de9a494162761a795f27ecd019c4ce8fe3ea948c960e0fd251c78af6f1ccc",
+         "hmac(100*a,data)={mac}");
+}
+
+fn test_hmac_sha256_long_data() {
+  // Long data exercises the streaming/multi-block path of the inner
+  // SHA-256.
+  mac = crypto::hmac_sha256("sec", repeat("a", 200));
+  assert(mac == "ed741c0af595e1ea3055cd781fe68f378d0d4830b3e2f54201fa83bf4b7e93c3",
+         "hmac(sec,200*a)={mac}");
+}
+
+// ── Base64 (RFC 4648 §10 padding cases) ───────────────────────────
+
+fn test_base64_padding_0() {
+  // 3-byte aligned input: no padding.
+  assert(crypto::base64_encode("foo") == "Zm9v", "b64(foo)");
+  assert(crypto::base64_encode("foobar") == "Zm9vYmFy", "b64(foobar)");
+}
+
+fn test_base64_padding_1() {
+  // 2-byte leftover: single `=`.
+  assert(crypto::base64_encode("fo") == "Zm8=", "b64(fo)");
+  assert(crypto::base64_encode("fooba") == "Zm9vYmE=", "b64(fooba)");
+}
+
+fn test_base64_padding_2() {
+  // 1-byte leftover: double `==`.
+  assert(crypto::base64_encode("f") == "Zg==", "b64(f)");
+  assert(crypto::base64_encode("foob") == "Zm9vYg==", "b64(foob)");
+}
+
+fn test_base64_empty() {
+  // Empty input → empty output (no padding).
+  assert(crypto::base64_encode("") == "", "b64(empty)");
+  assert(crypto::base64_decode("") == "", "b64dec(empty)");
+}
+
+fn test_base64_roundtrip_hello() {
   encoded = crypto::base64_encode("hello world");
   assert(encoded == "aGVsbG8gd29ybGQ=", "b64 encode");
   decoded = crypto::base64_decode(encoded);
   assert(decoded == "hello world", "b64 decode");
 }
 
-fn test_base64url() {
+fn test_base64_decode_all_paddings() {
+  // Round-trip each padding shape through decode.
+  assert(crypto::base64_decode("Zg==") == "f", "dec(Zg==)");
+  assert(crypto::base64_decode("Zm8=") == "fo", "dec(Zm8=)");
+  assert(crypto::base64_decode("Zm9v") == "foo", "dec(Zm9v)");
+  assert(crypto::base64_decode("Zm9vYg==") == "foob", "dec(Zm9vYg==)");
+  assert(crypto::base64_decode("Zm9vYmE=") == "fooba", "dec(Zm9vYmE=)");
+  assert(crypto::base64_decode("Zm9vYmFy") == "foobar", "dec(Zm9vYmFy)");
+}
+
+// ── Base64url (RFC 4648 §5: `+/` → `-_`, no padding) ──────────────
+
+fn test_base64url_hello() {
   encoded = crypto::base64url_encode("hello world");
-  assert(encoded == "aGVsbG8gd29ybGQ", "b64url");
+  assert(encoded == "aGVsbG8gd29ybGQ", "b64url(hello world)");
+}
+
+fn test_base64url_no_padding() {
+  // base64url strips padding; verify each padding shape.
+  assert(crypto::base64url_encode("f") == "Zg", "b64url(f) — no ==");
+  assert(crypto::base64url_encode("fo") == "Zm8", "b64url(fo) — no =");
+  assert(crypto::base64url_encode("foo") == "Zm9v", "b64url(foo)");
+  assert(crypto::base64url_encode("foob") == "Zm9vYg", "b64url(foob) — no ==");
+}
+
+fn test_base64url_substitutes_slash() {
+  // The UTF-8 sequence "ÿÿÿ" (= 0xc3 0xbf × 3) encodes to "w7/Dv8O/"
+  // in standard base64 — note the `/` characters at positions 2, 7.
+  // base64url must substitute `/` → `_` and strip padding.
+  encoded = crypto::base64url_encode("ÿÿÿ");
+  assert(encoded == "w7_Dv8O_", "b64url(ÿÿÿ) substitutes / → _");
 }
