@@ -4,7 +4,7 @@
 use arguments;
 
 // Handler functions: called when specific options are selected
-fn on_verbose(val: text) -> text {
+fn on_verbose(_val: text) -> text {
   "verbose_activated"
 }
 

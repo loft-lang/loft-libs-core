@@ -18,9 +18,14 @@ struct Args {
   name: text,
   version: text,
   description: text,
-  options: vector<Arg>,
-  results: vector<text>,
-  positionals: vector<text>,
+  // `not null` on the vector fields silences the field-level
+  // "is read N times and never defended" warning under
+  // LOFT_DENY_WARNINGS=1.  Safe: `create` initialises each to `[]`
+  // (non-null empty), and the only writers append/index-assign —
+  // neither path produces null.
+  options: vector<Arg> not null,
+  results: vector<text> not null,
+  positionals: vector<text> not null,
   err: text
 }
 
@@ -63,9 +68,20 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
   self.err = "";
   p_pending = -1;
   p_past = false;
+  // Capture options + results into locals so skip-pattern 5
+  // (`if idx < len(vec) { vec[idx] }`) can prove bounds on each
+  // indexed access — the pattern only matches when the vec is a bare
+  // local Var, not a struct field deref.  The locals alias the same
+  // backing vectors as self.options/self.results, so indexed writes
+  // propagate; appends still go through `self.positionals` to keep
+  // the alias valid.
+  options = self.options;
+  results = self.results;
   for pa in argv {
     if p_pending >= 0 {
-      self.results[p_pending] = pa;
+      if p_pending < len(results) {
+        results[p_pending] = pa;
+      }
       p_pending = -1;
     } else if p_past {
       self.positionals += [pa];
@@ -80,10 +96,14 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
           self.err = "Unknown option: --{p_long}";
           return false
         }
-        if self.options[p_idx].kind == ArgKind.Flag {
-          self.results[p_idx] = "true";
-        } else {
-          p_pending = p_idx;
+        if p_idx < len(options) {
+          if options[p_idx].kind == ArgKind.Flag {
+            if p_idx < len(results) {
+              results[p_idx] = "true";
+            }
+          } else {
+            p_pending = p_idx;
+          }
         }
       } else {
         p_name = p_long[0..p_eq];
@@ -93,12 +113,16 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
           self.err = "Unknown option: --{p_name}";
           return false
         }
-        self.results[p_idx] = p_val;
+        if p_idx < len(results) {
+          results[p_idx] = p_val;
+        }
       }
     } else if len(pa) > 1 && pa.starts_with("-") {
       for pc in pa[1..] {
         if p_pending >= 0 {
-          self.results[p_pending] = pa[pc#index + 1..];
+          if p_pending < len(results) {
+            results[p_pending] = pa[pc#index + 1..];
+          }
           p_pending = -1;
           break
         }
@@ -107,10 +131,14 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
           self.err = "Unknown option: -{pc}";
           return false
         }
-        if self.options[p_si].kind == ArgKind.Flag {
-          self.results[p_si] = "true";
-        } else {
-          p_pending = p_si;
+        if p_si < len(options) {
+          if options[p_si].kind == ArgKind.Flag {
+            if p_si < len(results) {
+              results[p_si] = "true";
+            }
+          } else {
+            p_pending = p_si;
+          }
         }
       }
     } else {
@@ -118,14 +146,24 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
     }
   }
   if p_pending >= 0 {
-    self.err = "Option --{self.options[p_pending].long_name} requires a value";
+    if p_pending < len(options) {
+      self.err = "Option --{options[p_pending].long_name} requires a value";
+    }
     return false
   }
   for pm in self.options {
     if pm.mandatory {
-      if !self.results[pm#index] {
-        self.err = "Required option --{pm.long_name} is missing";
-        return false
+      // pm#index is the for-loop position into self.options.
+      // self.results is kept in lockstep (see flag/option/required
+      // above); the explicit `< len(results)` check makes the
+      // in-bounds proof visible to the parser.
+      mi = pm#index;
+      if mi < len(results) {
+        val = results[mi];
+        if val == null {
+          self.err = "Required option --{pm.long_name} is missing";
+          return false
+        }
       }
     }
   }
@@ -133,22 +171,35 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
 }
 
 pub fn has(self: Args, name: text) -> boolean {
+  results = self.results;
   for ho in self.options {
     if ho.long_name == name {
-      if !self.results[ho#index] { return false }
-      return true
+      hi = ho#index;
+      if hi < len(results) {
+        return results[hi] != null
+      }
+      return false
     }
   }
   false
 }
 
 pub fn get(self: Args, name: text) -> text {
+  results = self.results;
   get_idx = -1;
   for go in self.options {
     if go.long_name == name { get_idx = go#index; }
   }
   if get_idx < 0 { get_idx = 0; }
-  self.results[get_idx]
+  // The bound guard silences the v[i] warning via skip-pattern 5.
+  // The else-branch returning bare `null` requires @P385 to be
+  // fixed in loft main (relaxed `OpConv*FromNull` type match);
+  // without it the parser errors "expected text, got null on else".
+  if get_idx < len(results) {
+    results[get_idx]
+  } else {
+    null
+  }
 }
 
 pub fn ok(self: Args) -> boolean {
