@@ -10,16 +10,11 @@ native = "loft_random"
 [native]
 crate = "loft-random"
 
-# @PLAN12 phase 3.5a (2026-05-24) — declarative source of truth
-# for random's native symbols.  Walked by `tests/extraction_hygiene.rs`
-# to auto-populate FORBIDDEN_LIBRARY_SYMBOLS, and by
-# `src/parser/mod.rs::apply_manifest_side_effects` to route
-# native codegen through `extern crate loft_random;` +
-# `crate::n_<fn>(...)` qualified calls (same path as lib/crypto/).
-# rand_indices flows through the new `loft::native_call::build_store`
-# helper (added in same phase) so codegen can forward a LoftStore
-# handle to the cdylib's store-allocating return.
-[native.functions]
-rand          = "n_rand"
-rand_seed     = "n_rand_seed"
-rand_indices  = "n_rand_indices"
+# @PLAN12 Phase 6r (2026-05-29) — the `[native.functions]` manifest
+# is superseded by the clean source-scan pattern: `native/build.rs`
+# scans `src/*.loft` for bare `#native` annotations and generates the
+# `loft_register!` list at compile time.  Defining a native function
+# IS registering it — no parallel table to keep in sync.  See
+# `native/build.rs` and the canonical reference at
+# jjstwerff/loft `doc/claude/lib_plans/12-library-extraction/REFERENCE.md`
+# § Clean libraries — the principle.
