@@ -8,12 +8,13 @@
 //! text args as `(ptr, len)`.
 //!
 //! ABI signatures (all on existing interpreter marshaller arms):
-//!   n_matches    (text, text) -> bool
+//!   n_is_match   (text, text) -> bool
 //!   n_match_start(text, text) -> i64   first-match start offset, or i64::MIN
 //!   n_match_end  (text, text) -> i64   first-match end offset, or i64::MIN
 //!
-//! The loft surface exposes `matches` + `find` (wraps `n_match_start`) and a
-//! `split` iterator built in loft from `match_start`/`match_end`.
+//! The loft surface exposes `matches` (text method + free fn), `find` (wraps
+//! `n_match_start`), and a `split` iterator built in loft from
+//! `match_start`/`match_end` — plus `regex_find`/`regex_split` text methods.
 //!
 //! Patterns are passed inline (no compile step / handle).  A thread-local
 //! cache maps `pattern -> compiled Regex` so each distinct pattern
@@ -63,10 +64,11 @@ fn with_compiled<R>(pat: &str, miss: R, f: impl FnOnce(&Regex) -> R) -> R {
     })
 }
 
-/// `#native "n_matches"` — true if `pattern` matches anywhere in `input`.
-/// An invalid pattern returns false.
+/// `#native "n_is_match"` — true if `pattern` matches anywhere in `input`.
+/// An invalid pattern returns false.  (The loft-side `matches` / `text`
+/// method wraps this.)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_matches(
+pub unsafe extern "C" fn n_is_match(
     pat_ptr: *const u8,
     pat_len: usize,
     in_ptr: *const u8,

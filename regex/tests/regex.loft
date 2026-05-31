@@ -1,58 +1,69 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// Regex Phase 0: matches, find (inline patterns, thread-local cache).
+// Regex Phase 0: matches / find / split, as free functions AND text methods.
 use regex;
 
 fn main() {
-  // --- matches: presence / absence ---
-  assert(regex::matches("[0-9]+", "abc123"), "digits present -> match");
-  assert(!regex::matches("[0-9]+", "abcdef"), "no digits -> no match");
+  // --- matches: text method (subject.matches(pattern)) ---
+  assert("abc123".matches("[0-9]+"), "digits present -> match");
+  assert(!"abcdef".matches("[0-9]+"), "no digits -> no match");
+  // ...and the free form (subject-first, via `both`)
+  assert(regex::matches("abc123", "[0-9]+"), "free matches(input, pattern)");
 
-  // --- find: byte offset of first match, null when none ---
-  assert(regex::find("[0-9]+", "abc123") == 3, "first digit at offset 3");
-  assert(!regex::find("[0-9]+", "abcdef"), "no match -> null offset");
-  assert(regex::find("[a-z]+", "  hi") == 2, "word starts at offset 2");
+  // --- find: free fn (pattern-first) AND regex_find method (subject-first) ---
+  assert(regex::find("[0-9]+", "abc123") == 3, "free find -> offset 3");
+  assert("abc123".regex_find("[0-9]+") == 3, "method regex_find -> offset 3");
+  assert(!"abcdef".regex_find("[0-9]+"), "regex_find no match -> null");
 
   // --- anchored pattern ---
-  assert(regex::matches("^foo", "foobar"), "^foo matches foobar");
-  assert(!regex::matches("^foo", "barfoo"), "^foo does not match barfoo");
+  assert("foobar".matches("^foo"), "^foo matches foobar");
+  assert(!"barfoo".matches("^foo"), "^foo does not match barfoo");
 
   // --- invalid pattern fails safely (no raise) ---
-  assert(!regex::matches("[unclosed", "anything"), "invalid pattern -> false");
-  assert(!regex::find("(", "anything"), "invalid pattern -> null");
+  assert(!"anything".matches("[unclosed"), "invalid pattern -> false");
+  assert(!"anything".regex_find("("), "invalid pattern -> null");
 
   // --- cache: many repeated calls with the same pattern stay correct ---
   ok = true;
   for _i in 0..200 {
-    if !regex::matches("[a-z]+", "hello") {
+    if !"hello".matches("[a-z]+") {
       ok = false;
     }
   }
   assert(ok, "cached repeated calls remain correct");
 
-  // --- split: yields pieces lazily through iterator<text> ---
+  // --- split: free fn (pattern-first) ---
   parts = "";
   count = 0;
   for piece in regex::split("[,;]", "a,b;c") {
     parts = "{parts}{piece}|";
     count = count + 1;
   }
-  assert(count == 3, "split -> 3 pieces (got {count})");
-  assert(parts == "a|b|c|", "split pieces = a|b|c| (got {parts})");
-}
+  assert(count == 3, "free split -> 3 pieces (got {count})");
+  assert(parts == "a|b|c|", "free split pieces = a|b|c| (got {parts})");
 
-fn test_split_basic() {
-  out = "";
-  for p in regex::split(",", "a,b,c") {
-    out = "{out}[{p}]";
+  // --- split: regex_split method (subject-first) ---
+  mparts = "";
+  for piece in "x,y,z".regex_split(",") {
+    mparts = "{mparts}{piece}.";
   }
-  assert(out == "[a][b][c]", "comma split (got {out})");
+  assert(mparts == "x.y.z.", "method regex_split pieces (got {mparts})");
 }
 
-fn test_split_regex_separator() {
+fn test_matches_method() {
+  assert("abc123".matches("[0-9]+"), "digits present");
+  assert(!"xyz".matches("[0-9]+"), "no digits");
+}
+
+fn test_regex_find_method() {
+  assert("hello world".regex_find("world") == 6, "world at offset 6");
+  assert(!"hello there".regex_find("world"), "no world -> null");
+}
+
+fn test_regex_split_method() {
   out = "";
   n = 0;
-  for p in regex::split(" +", "one  two   three") {
+  for p in "one  two   three".regex_split(" +") {
     out = "{out}{p}.";
     n = n + 1;
   }
@@ -60,41 +71,18 @@ fn test_split_regex_separator() {
   assert(out == "one.two.three.", "split on ' +' (got {out})");
 }
 
-fn test_split_no_match() {
-  n = 0;
-  whole = "";
-  for p in regex::split(",", "nocommas") {
-    whole = p;
-    n = n + 1;
+fn test_free_functions() {
+  // the pattern-first free forms still work
+  assert(regex::find("[0-9]+", "abc123") == 3, "free find");
+  assert(regex::matches("abc123", "[0-9]+"), "free matches subject-first");
+  c = 0;
+  for _p in regex::split(",", "a,b") {
+    c = c + 1;
   }
-  assert(n == 1, "no separator -> 1 piece (got {n})");
-  assert(whole == "nocommas", "whole string when no match");
-}
-
-fn test_split_trailing() {
-  n = 0;
-  for _p in regex::split(",", "a,") {
-    n = n + 1;
-  }
-  assert(n == 2, "trailing separator -> 2 pieces incl empty (got {n})");
-}
-
-fn test_matches() {
-  assert(regex::matches("[0-9]+", "abc123"), "digits present");
-  assert(!regex::matches("[0-9]+", "xyz"), "no digits");
-}
-
-fn test_find_offset() {
-  assert(regex::find("world", "hello world") == 6, "world at offset 6");
-  assert(!regex::find("world", "hello there"), "no world -> null");
-}
-
-fn test_anchors() {
-  assert(regex::matches("^foo$", "foo"), "exact foo");
-  assert(!regex::matches("^foo$", "foobar"), "foobar not exact");
+  assert(c == 2, "free split count");
 }
 
 fn test_invalid_pattern_safe() {
-  assert(!regex::matches("(", "x"), "invalid -> no match");
-  assert(!regex::find("[", "x"), "invalid -> null find");
+  assert(!"x".matches("("), "invalid -> no match");
+  assert(!"x".regex_find("["), "invalid -> null find");
 }
