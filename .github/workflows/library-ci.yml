@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [arguments, random, crypto]
+        package: [arguments, random, crypto, regex]
     steps:
       - uses: actions/checkout@v4
 
