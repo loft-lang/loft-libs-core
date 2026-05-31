@@ -1,32 +1,33 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Native regex bridge for the `regex` loft package.  Three `#native`
-//! symbols (`n_regex_compile`, `n_regex_is_match`, `n_regex_find`) wrap the
-//! Rust `regex` crate — the de-facto-standard, linear-time, ReDoS-safe
-//! engine.  Same shape as `random`/`crypto`: bare `#[no_mangle] extern "C"`,
-//! i64 ABI with the `i64::MIN` null sentinel, text args as `(ptr, len)`.
+//! Native regex bridge for the `regex` loft package.  Two `#native`
+//! symbols (`n_matches`, `n_find`) wrap the Rust `regex` crate — the
+//! de-facto-standard, linear-time, ReDoS-safe engine.  Same shape as
+//! `random`/`crypto`: bare `#[no_mangle] extern "C"`, i64 ABI with the
+//! `i64::MIN` null sentinel, text args as `(ptr, len)`.
 //!
-//! ABI signatures (all on existing interpreter marshaller arms):
-//!   n_regex_compile (text)        -> i64    handle, or i64::MIN on bad pattern
-//!   n_regex_is_match(i64, text)   -> bool
-//!   n_regex_find    (i64, text)   -> i64    first-match byte offset, or i64::MIN
+//! ABI signatures (both on existing interpreter marshaller arms):
+//!   n_matches(text, text) -> bool
+//!   n_find   (text, text) -> i64    first-match byte offset, or i64::MIN
 //!
-//! Compiled `Regex` objects live in a thread-local handle table; the loft
-//! `Regex` value carries the integer handle.  (Thread-local means a handle
-//! compiled on one thread is not visible on another — acceptable for the
-//! Phase 0 single-threaded surface; revisited when `par` use arises.)
+//! Patterns are passed inline (no compile step / handle).  A thread-local
+//! cache maps `pattern -> compiled Regex` so each distinct pattern
+//! compiles once; repeated calls are hash lookups.  An invalid pattern is
+//! cached as `None`, so a bad pattern is not re-attempted either.  The
+//! cache never evicts — ideal for the handful of literal patterns a script
+//! uses; a program generating many *dynamic* patterns would grow it
+//! unbounded (acceptable for this library's script-tool scope).
 
 #![allow(clippy::missing_safety_doc)]
 
 use regex::Regex;
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 thread_local! {
-    // Compile-once handle table: a handle is an index into this vector.
-    // Never shrinks within a run (compiled patterns live for the program);
-    // a freeing API is deferred to a later phase.
-    static REGEXES: RefCell<Vec<Regex>> = const { RefCell::new(Vec::new()) };
+    static CACHE: RefCell<HashMap<String, Option<Regex>>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Borrow a loft text argument `(ptr, len)` as `&str` (lossless; invalid
@@ -40,50 +41,52 @@ unsafe fn rx_str<'a>(ptr: *const u8, len: usize) -> &'a str {
     }
 }
 
-/// `#native "n_regex_compile"` — compile `pattern`; returns an i64 handle,
-/// or `i64::MIN` (loft `null`) when the pattern is syntactically invalid.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_regex_compile(pat_ptr: *const u8, pat_len: usize) -> i64 {
-    let pat = unsafe { rx_str(pat_ptr, pat_len) };
-    match Regex::new(pat) {
-        Ok(re) => REGEXES.with(|t| {
-            let mut v = t.borrow_mut();
-            v.push(re);
-            (v.len() - 1) as i64
-        }),
-        Err(_) => i64::MIN,
-    }
-}
-
-/// `#native "n_regex_is_match"` — true if the compiled regex `handle`
-/// matches anywhere in `input`.  A null/out-of-range handle yields false.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_regex_is_match(handle: i64, in_ptr: *const u8, in_len: usize) -> bool {
-    if handle < 0 {
-        return false;
-    }
-    let input = unsafe { rx_str(in_ptr, in_len) };
-    REGEXES.with(|t| {
-        t.borrow()
-            .get(handle as usize)
-            .is_some_and(|re| re.is_match(input))
+/// Look up (or compile-and-cache) `pat`, then run `f` against the compiled
+/// regex.  Returns `miss` when the pattern is invalid.  The fast path —
+/// pattern already cached — allocates nothing.
+#[inline]
+fn with_compiled<R>(pat: &str, miss: R, f: impl FnOnce(&Regex) -> R) -> R {
+    CACHE.with(|c| {
+        // Fast path: already compiled — no allocation.
+        if let Some(slot) = c.borrow().get(pat) {
+            return slot.as_ref().map_or(miss, f);
+        }
+        // Slow path: compile once, run, then cache (Some or None).
+        let compiled = Regex::new(pat).ok();
+        let result = compiled.as_ref().map_or(miss, f);
+        c.borrow_mut().insert(pat.to_owned(), compiled);
+        result
     })
 }
 
-/// `#native "n_regex_find"` — byte offset of the first match of `handle` in
-/// `input`, or `i64::MIN` (loft `null`) when there is no match / bad handle.
+/// `#native "n_matches"` — true if `pattern` matches anywhere in `input`.
+/// An invalid pattern returns false.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_regex_find(handle: i64, in_ptr: *const u8, in_len: usize) -> i64 {
-    if handle < 0 {
-        return i64::MIN;
-    }
+pub unsafe extern "C" fn n_matches(
+    pat_ptr: *const u8,
+    pat_len: usize,
+    in_ptr: *const u8,
+    in_len: usize,
+) -> bool {
+    let pat = unsafe { rx_str(pat_ptr, pat_len) };
     let input = unsafe { rx_str(in_ptr, in_len) };
-    REGEXES.with(|t| match t.borrow().get(handle as usize) {
-        Some(re) => match re.find(input) {
-            Some(m) => m.start() as i64,
-            None => i64::MIN,
-        },
-        None => i64::MIN,
+    with_compiled(pat, false, |re| re.is_match(input))
+}
+
+/// `#native "n_find"` — byte offset of the first match of `pattern` in
+/// `input`, or `i64::MIN` (loft `null`) when there is no match / the
+/// pattern is invalid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_find(
+    pat_ptr: *const u8,
+    pat_len: usize,
+    in_ptr: *const u8,
+    in_len: usize,
+) -> i64 {
+    let pat = unsafe { rx_str(pat_ptr, pat_len) };
+    let input = unsafe { rx_str(in_ptr, in_len) };
+    with_compiled(pat, i64::MIN, |re| {
+        re.find(input).map_or(i64::MIN, |m| m.start() as i64)
     })
 }
 
