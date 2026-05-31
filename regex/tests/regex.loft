@@ -1,0 +1,54 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Regex Phase 0: compile, is_match, find.
+use regex;
+
+fn main() {
+  // --- is_match: presence / absence ---
+  digits = regex::regex("[0-9]+");
+  assert(regex::is_match(digits, "abc123"), "digits present -> match");
+  assert(!regex::is_match(digits, "abcdef"), "no digits -> no match");
+
+  // --- find: byte offset of first match, null when none ---
+  assert(regex::find(digits, "abc123") == 3, "first digit at offset 3");
+  assert(!regex::find(digits, "abcdef"), "no match -> null offset");
+
+  // --- compile once, reuse across inputs ---
+  word = regex::regex("[a-z]+");
+  assert(regex::is_match(word, "hello"), "lowercase word matches");
+  assert(regex::find(word, "  hi") == 2, "word starts at offset 2");
+
+  // --- anchored pattern ---
+  start = regex::regex("^foo");
+  assert(regex::is_match(start, "foobar"), "^foo matches foobar");
+  assert(!regex::is_match(start, "barfoo"), "^foo does not match barfoo");
+
+  // --- invalid pattern fails safely (no raise) ---
+  bad = regex::regex("[unclosed");
+  assert(!regex::is_match(bad, "anything"), "invalid pattern -> is_match false");
+  assert(!regex::find(bad, "anything"), "invalid pattern -> find null");
+}
+
+fn test_is_match() {
+  re = regex::regex("[0-9]+");
+  assert(regex::is_match(re, "abc123"), "digits present");
+  assert(!regex::is_match(re, "xyz"), "no digits");
+}
+
+fn test_find_offset() {
+  re = regex::regex("world");
+  assert(regex::find(re, "hello world") == 6, "world at offset 6");
+  assert(!regex::find(re, "hello there"), "no world -> null");
+}
+
+fn test_anchors() {
+  re = regex::regex("^foo$");
+  assert(regex::is_match(re, "foo"), "exact foo");
+  assert(!regex::is_match(re, "foobar"), "foobar not exact");
+}
+
+fn test_invalid_pattern_safe() {
+  re = regex::regex("(");
+  assert(!regex::is_match(re, "x"), "invalid -> no match");
+  assert(!regex::find(re, "x"), "invalid -> null find");
+}

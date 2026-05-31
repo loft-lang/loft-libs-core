@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- Regex ---
+// Regular expressions for loft, backed by the Rust `regex` crate.
+//
+// Phase 0 (this version): a thin `#native` cdylib bridge exposing
+// compile-once handles + the linear-time, ReDoS-safe matching of the
+// Rust `regex` engine.  The surface below is the stable target; later
+// phases swap a pure-loft NFA engine underneath the SAME API.
+//
+// Scope of Phase 0: `regex`, `is_match`, `find`.  Capture groups,
+// `find_all -> vector<Match>`, `replace`, `split`, and named groups
+// are deferred — they return structs / vectors / 3-text-arg text,
+// which the interpreter's dlopen marshaller has no signature arm for
+// yet (a real FFI gap tracked in the regex plan, not worked around here).
+
+// --- Internal natives (bridge to the Rust `regex` crate) ---
+
+// Compile `pattern` into a reusable handle.  Returns a null integer when
+// the pattern is syntactically invalid.
+fn regex_compile(pattern: text) -> integer;
+#native
+
+// True if the compiled regex `handle` matches anywhere in `input`.
+fn regex_is_match(handle: integer, input: text) -> boolean;
+#native
+
+// Byte offset of the first match of `handle` in `input`, or null when
+// there is no match.
+fn regex_find(handle: integer, input: text) -> integer;
+#native
+
+// --- Public API ---
+
+// A compiled regular expression.  Construct with `regex(...)` and reuse
+// across many inputs — compilation happens once.
+pub struct Regex {
+  handle: integer,
+}
+
+// Compile a pattern into a reusable `Regex`.  A syntactically invalid
+// pattern yields a `Regex` whose operations all fail safely
+// (`is_match` -> false, `find` -> null) rather than raising.
+pub fn regex(pattern: text) -> Regex {
+  Regex { handle: regex_compile(pattern) }
+}
+
+// True if `re` matches anywhere in `input`.
+pub fn is_match(re: Regex, input: text) -> boolean {
+  regex_is_match(re.handle, input)
+}
+
+// Byte offset of the first match of `re` in `input`, or null when there
+// is no match.
+pub fn find(re: Regex, input: text) -> integer {
+  regex_find(re.handle, input)
+}
