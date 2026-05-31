@@ -15,3 +15,13 @@ crate = "loft-regex"
 # compile time — defining a native function IS registering it, so there is no
 # parallel table to drift.  (Same clean source-scan pattern as `random`
 # v0.1.1 / `crypto`; see the chunk's REFERENCE.md § "Clean libraries".)
+
+# Lazy-load opt-in — regex is a script tool, so `use regex;` should be
+# optional.  This single flag is the WHOLE declaration: loft derives the
+# actual triggers (the `regex::` namespace, the public text-methods, any
+# public types) from this library's own source — nothing is hand-listed, so
+# nothing can drift (same source-of-truth principle as the native symbols
+# above).  The resolver that acts on this is future work (lib_plans/future/
+# 03-lazy-stdlib).
+[triggers]
+enabled = true
