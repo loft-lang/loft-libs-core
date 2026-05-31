@@ -21,11 +21,13 @@ loft install regex
 
 ## API
 
-| Function | Returns | Notes |
+Compile once with `regex::compile`, then call methods on the `Regex`:
+
+| Call | Returns | Notes |
 |---|---|---|
-| `regex(pattern: text) -> Regex` | a compiled regex | compile once, reuse; an invalid pattern yields a `Regex` whose ops fail safely |
-| `is_match(re: Regex, input: text) -> boolean` | `true` if `re` matches anywhere in `input` | |
-| `find(re: Regex, input: text) -> integer` | byte offset of the first match | `null` when there is no match |
+| `regex::compile(pattern: text) -> Regex` | a compiled regex | compile once, reuse; an invalid pattern yields a `Regex` whose ops fail safely |
+| `re.is_match(input: text) -> boolean` | `true` if `re` matches anywhere in `input` | method on `Regex` |
+| `re.find(input: text) -> integer` | byte offset of the first match | `null` when there is no match |
 
 ## Usage
 
@@ -33,9 +35,9 @@ loft install regex
 use regex;
 
 fn main() {
-    digits = regex::regex("[0-9]+");
-    if regex::is_match(digits, "order #123") {
-        print("starts at {regex::find(digits, "order #123")}\n");  // 7
+    digits = regex::compile("[0-9]+");
+    if digits.is_match("order #123") {
+        print("starts at {digits.find("order #123")}\n");  // 7
     }
 }
 ```

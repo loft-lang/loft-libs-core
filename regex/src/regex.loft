@@ -8,9 +8,9 @@
 // Rust `regex` engine.  The surface below is the stable target; later
 // phases swap a pure-loft NFA engine underneath the SAME API.
 //
-// Scope of Phase 0: `regex`, `is_match`, `find`.  Capture groups,
-// `find_all -> vector<Match>`, `replace`, `split`, and named groups
-// are deferred — they return structs / vectors / 3-text-arg text,
+// Scope of Phase 0: `compile` + the `is_match` / `find` methods on
+// `Regex`.  Capture groups, `find_all -> vector<Match>`, `replace`,
+// `split`, and named groups are deferred — they return structs / vectors / 3-text-arg text,
 // which the interpreter's dlopen marshaller has no signature arm for
 // yet (a real FFI gap tracked in the regex plan, not worked around here).
 
@@ -41,17 +41,17 @@ pub struct Regex {
 // Compile a pattern into a reusable `Regex`.  A syntactically invalid
 // pattern yields a `Regex` whose operations all fail safely
 // (`is_match` -> false, `find` -> null) rather than raising.
-pub fn regex(pattern: text) -> Regex {
+pub fn compile(pattern: text) -> Regex {
   Regex { handle: regex_compile(pattern) }
 }
 
-// True if `re` matches anywhere in `input`.
-pub fn is_match(re: Regex, input: text) -> boolean {
-  regex_is_match(re.handle, input)
+// True if `self` matches anywhere in `input`.  Call as `re.is_match(line)`.
+pub fn is_match(self: Regex, input: text) -> boolean {
+  regex_is_match(self.handle, input)
 }
 
-// Byte offset of the first match of `re` in `input`, or null when there
-// is no match.
-pub fn find(re: Regex, input: text) -> integer {
-  regex_find(re.handle, input)
+// Byte offset of the first match of `self` in `input`, or null when there
+// is no match.  Call as `re.find(line)`.
+pub fn find(self: Regex, input: text) -> integer {
+  regex_find(self.handle, input)
 }
