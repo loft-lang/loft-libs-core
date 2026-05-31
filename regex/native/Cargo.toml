@@ -1,0 +1,15 @@
+[package]
+name = "loft-regex"
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+loft-ffi = "0.1"
+regex = "1"
+
+[build-dependencies]
+loft-ffi-build = "0.2"
