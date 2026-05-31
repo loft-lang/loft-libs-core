@@ -1,15 +1,19 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Native regex bridge for the `regex` loft package.  Two `#native`
-//! symbols (`n_matches`, `n_find`) wrap the Rust `regex` crate — the
-//! de-facto-standard, linear-time, ReDoS-safe engine.  Same shape as
-//! `random`/`crypto`: bare `#[no_mangle] extern "C"`, i64 ABI with the
-//! `i64::MIN` null sentinel, text args as `(ptr, len)`.
+//! Native regex bridge for the `regex` loft package.  Three `#native`
+//! symbols wrap the Rust `regex` crate — the de-facto-standard,
+//! linear-time, ReDoS-safe engine.  Same shape as `random`/`crypto`: bare
+//! `#[no_mangle] extern "C"`, i64 ABI with the `i64::MIN` null sentinel,
+//! text args as `(ptr, len)`.
 //!
-//! ABI signatures (both on existing interpreter marshaller arms):
-//!   n_matches(text, text) -> bool
-//!   n_find   (text, text) -> i64    first-match byte offset, or i64::MIN
+//! ABI signatures (all on existing interpreter marshaller arms):
+//!   n_matches    (text, text) -> bool
+//!   n_match_start(text, text) -> i64   first-match start offset, or i64::MIN
+//!   n_match_end  (text, text) -> i64   first-match end offset, or i64::MIN
+//!
+//! The loft surface exposes `matches` + `find` (wraps `n_match_start`) and a
+//! `split` iterator built in loft from `match_start`/`match_end`.
 //!
 //! Patterns are passed inline (no compile step / handle).  A thread-local
 //! cache maps `pattern -> compiled Regex` so each distinct pattern
@@ -73,11 +77,11 @@ pub unsafe extern "C" fn n_matches(
     with_compiled(pat, false, |re| re.is_match(input))
 }
 
-/// `#native "n_find"` — byte offset of the first match of `pattern` in
-/// `input`, or `i64::MIN` (loft `null`) when there is no match / the
-/// pattern is invalid.
+/// `#native "n_match_start"` — byte offset of the START of the first match
+/// of `pattern` in `input`, or `i64::MIN` (loft `null`) when there is no
+/// match / the pattern is invalid.  The loft-side `find` wraps this.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_find(
+pub unsafe extern "C" fn n_match_start(
     pat_ptr: *const u8,
     pat_len: usize,
     in_ptr: *const u8,
@@ -87,6 +91,23 @@ pub unsafe extern "C" fn n_find(
     let input = unsafe { rx_str(in_ptr, in_len) };
     with_compiled(pat, i64::MIN, |re| {
         re.find(input).map_or(i64::MIN, |m| m.start() as i64)
+    })
+}
+
+/// `#native "n_match_end"` — byte offset of the END of the first match of
+/// `pattern` in `input`, or `i64::MIN` (loft `null`) when there is no match
+/// / the pattern is invalid.  Used by the loft-side `split` iterator.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_match_end(
+    pat_ptr: *const u8,
+    pat_len: usize,
+    in_ptr: *const u8,
+    in_len: usize,
+) -> i64 {
+    let pat = unsafe { rx_str(pat_ptr, pat_len) };
+    let input = unsafe { rx_str(in_ptr, in_len) };
+    with_compiled(pat, i64::MIN, |re| {
+        re.find(input).map_or(i64::MIN, |m| m.end() as i64)
     })
 }
 

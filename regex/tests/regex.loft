@@ -23,12 +23,60 @@ fn main() {
 
   // --- cache: many repeated calls with the same pattern stay correct ---
   ok = true;
-  for i in 0..200 {
+  for _i in 0..200 {
     if !regex::matches("[a-z]+", "hello") {
       ok = false;
     }
   }
   assert(ok, "cached repeated calls remain correct");
+
+  // --- split: yields pieces lazily through iterator<text> ---
+  parts = "";
+  count = 0;
+  for piece in regex::split("[,;]", "a,b;c") {
+    parts = "{parts}{piece}|";
+    count = count + 1;
+  }
+  assert(count == 3, "split -> 3 pieces (got {count})");
+  assert(parts == "a|b|c|", "split pieces = a|b|c| (got {parts})");
+}
+
+fn test_split_basic() {
+  out = "";
+  for p in regex::split(",", "a,b,c") {
+    out = "{out}[{p}]";
+  }
+  assert(out == "[a][b][c]", "comma split (got {out})");
+}
+
+fn test_split_regex_separator() {
+  out = "";
+  n = 0;
+  for p in regex::split(" +", "one  two   three") {
+    out = "{out}{p}.";
+    n = n + 1;
+  }
+  assert(n == 3, "whitespace-run split -> 3 (got {n})");
+  assert(out == "one.two.three.", "split on ' +' (got {out})");
+}
+
+fn test_split_no_match() {
+  n = 0;
+  whole = "";
+  for p in regex::split(",", "nocommas") {
+    whole = p;
+    n = n + 1;
+  }
+  assert(n == 1, "no separator -> 1 piece (got {n})");
+  assert(whole == "nocommas", "whole string when no match");
+}
+
+fn test_split_trailing() {
+  n = 0;
+  for _p in regex::split(",", "a,") {
+    n = n + 1;
+  }
+  assert(n == 2, "trailing separator -> 2 pieces incl empty (got {n})");
 }
 
 fn test_matches() {

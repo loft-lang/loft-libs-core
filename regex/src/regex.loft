@@ -23,7 +23,42 @@
 pub fn matches(pattern: text, input: text) -> boolean;
 #native
 
+// (internal) Byte offset of the START of the first match, or null.  Named
+// distinctly from stdlib `text.find` so unqualified calls inside this
+// module resolve here, not to the (reverse-argument) text method.
+fn match_start(pattern: text, input: text) -> integer;
+#native
+
+// (internal) Byte offset of the END of the first match, or null.
+fn match_end(pattern: text, input: text) -> integer;
+#native
+
 // Byte offset of the first match of `pattern` in `input`, or null when
 // there is no match (or the pattern is invalid).
-pub fn find(pattern: text, input: text) -> integer;
-#native
+pub fn find(pattern: text, input: text) -> integer {
+  match_start(pattern, input)
+}
+
+// Split `input` on matches of `pattern`, yielding each piece lazily.
+// Reuses loft's coroutine channel — pieces stream through `iterator<text>`,
+// nothing is materialised.  Consume with a for-loop:
+//   for piece in regex::split("[,;]", line) { use(piece) }
+// (regex byte offsets line up with loft's byte-indexed text slicing.)
+pub fn split(pattern: text, input: text) -> iterator<text> {
+  pos = 0;
+  n = input.len();
+  while true {
+    rest = input[pos..n];
+    s = match_start(pattern, rest);
+    if s < 0 {
+      yield rest;
+      break;
+    }
+    yield input[pos..pos + s];
+    e = match_end(pattern, rest);
+    if e <= s {
+      e = s + 1;
+    }
+    pos = pos + e;
+  }
+}
