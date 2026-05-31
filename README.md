@@ -21,6 +21,7 @@ Per the chunked-repo design in
 | [`crypto/`](crypto/) | `crypto` — SHA-256, HMAC, base64 | v0.1.0 (extracted 2026-05-24) |
 | [`arguments/`](arguments/) | `arguments` — CLI argument parsing | v0.1.0 (extracted 2026-05-24) |
 | [`random/`](random/) | `random` — PRNG | v0.1.0 (extracted 2026-05-24, **showcase drain**: the LoftStore-forwarding codegen feature in loft 0.8.5+ ships here as its canonical example) |
+| [`regex/`](regex/) | `regex` — small-script regex (`matches`/`find`/`split`, thread-local cache) | v0.1.0 (added 2026-06-01) |
 
 Future drains from the loft stdlib (Phase 3.6 in
 [plan-12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md#phase-36--stdlib-drain-into-libs))
@@ -48,6 +49,7 @@ packages in this multi-package repo:
 | crypto 0.1.0 | `crypto-v0.1.0` |
 | arguments 0.1.0 (future) | `arguments-v0.1.0` |
 | random 0.1.0 (future) | `random-v0.1.0` |
+| regex 0.1.0 (future) | `regex-v0.1.0` |
 
 A package's release flow (also documented in
 [SUBMITTING.md](https://github.com/loft-lang/registry/blob/main/SUBMITTING.md)
