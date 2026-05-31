@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Tier-1 trigger: the text-method form with NO `use regex;`.  The parser
+// auto-loads regex via its declared `[triggers] enabled` — the `matches` /
+// `regex_find` / `regex_split` text-methods derived from this package's source.
+fn main() {
+  assert("abc123".matches("[0-9]+"), "matches auto-loads regex (no use)");
+  assert(!"abcdef".matches("[0-9]+"), "no digits -> no match");
+  assert("abc123".regex_find("[0-9]+") == 3, "regex_find auto-loads");
+  out = "";
+  for p in "a,b,c".regex_split(",") {
+    out = "{out}{p}.";
+  }
+  assert(out == "a.b.c.", "regex_split auto-loads (got {out})");
+}
