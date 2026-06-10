@@ -84,10 +84,12 @@ pub fn indices(self: RandStream, n: integer) -> vector<integer> {
   for i in 0..n { out += [i]; }
   j = n - 1;
   while j > 0 {
-    k = get(self, 0, j);
-    t = out[j] ?? 0;
-    out[j] = out[k] ?? 0;
-    out[k] = t;
+    k = get(self, 0, j) ?? 0;
+    if k < len(out) && j < len(out) {
+      t = out[j] ?? 0;
+      out[j] = out[k] ?? 0;
+      out[k] = t;
+    }
     j -= 1;
   }
   out

@@ -13,7 +13,7 @@ fn main() {
 fn test_stream_in_range() {
   r = random::seed_stream(42);
   ok = true;
-  for i in 0..200 {
+  for _ in 0..200 {
     v = r.get(10, 20);
     if v < 10 || v > 20 { ok = false; }
   }
