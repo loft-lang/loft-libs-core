@@ -18,3 +18,79 @@ pub fn rand_seed(seed: integer);
 // Returns an empty vector when n is 0 or null.
 pub fn rand_indices(n: integer) -> vector<integer>;
 #native
+
+// --- RandStream: owned random streams (the value tier) ---
+//
+// The global rand()/rand_seed() above share ONE hidden generator — right for casual
+// use, wrong when the RNG is part of your STATE. A RandStream is an independent,
+// deterministic stream you OWN: seed it, carry it (a plain struct — it saves, replays
+// and syncs with your data), and draw from it without any other call site reordering
+// your sequence. Typical uses: a game's per-level generation stream vs its combat
+// stream; several simulations alive in one process; replay/lockstep determinism.
+//
+// Pure loft, no native: L'Ecuyer's (1988) combined LCG — two Lehmer streams over
+// distinct primes via Schrage's method, combined. Period ~2.3e18, classical
+// statistical quality, and every intermediate product stays far below loft's
+// overflow-trapping 2^63.
+//
+// A struct parameter is a store link, so draws advance the stream through the
+// default receiver — methods-way call sites:
+//
+//   r = seed_stream(7);
+//   v = r.get(1, 6);          // a die roll from THIS stream
+//   p = r.indices(52);        // a shuffled deck from THIS stream
+
+pub struct RandStream {
+  s1: integer not null,   // Lehmer state A in [1, 2147483562]
+  s2: integer not null,   // Lehmer state B in [1, 2147483398]
+}
+
+// Seed an independent stream. Any integer seed is valid (negative and zero included);
+// equal seeds give equal streams, different seeds give decorrelated streams.
+pub fn seed_stream(seed: integer) -> RandStream {
+  a = seed % 2147483562 ?? 0;
+  if a < 0 { a = -a; }
+  t = seed % 2147483398 ?? 0;
+  if t < 0 { t = -t; }
+  // decorrelate s2 from s1 for small seeds with one cheap Lehmer-style mix
+  mix = ((a + 1) * 40014) % 2147483563 ?? 0;
+  RandStream { s1: a + 1, s2: ((t + mix) % 2147483398 ?? 0) + 1 }
+}
+
+// A random integer in [lo, hi] (inclusive) from THIS stream, advancing it.
+// Returns null when lo > hi (the same contract as the global rand()).
+pub fn get(self: RandStream, lo: integer, hi: integer) -> integer {
+  if lo > hi { return null; }
+  // L'Ecuyer combined LCG, Schrage's method (all products < 2^31 * 40692 — trap-safe)
+  k1 = self.s1 / 53668 ?? 0;
+  n1 = 40014 * (self.s1 - k1 * 53668) - k1 * 12211;
+  if n1 < 0 { n1 += 2147483563; }
+  k2 = self.s2 / 52774 ?? 0;
+  n2 = 40692 * (self.s2 - k2 * 52774) - k2 * 3791;
+  if n2 < 0 { n2 += 2147483399; }
+  self.s1 = n1;
+  self.s2 = n2;
+  z = (n1 - n2) % 2147483562 ?? 0;
+  if z < 1 { z += 2147483562; }
+  lo + ((z - 1) % (hi - lo + 1) ?? 0)
+}
+
+// A random permutation of [0, 1, ..., n-1] from THIS stream (Fisher-Yates), advancing
+// it. Empty when n is 0, negative or null (the same contract as rand_indices()).
+pub fn indices(self: RandStream, n: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  if !n { return out; }
+  if n <= 0 { return out; }
+  for i in 0..n { out += [i]; }
+  j = n - 1;
+  while j > 0 {
+    k = get(self, 0, j) ?? 0;
+    if k < len(out) && j < len(out) {
+      t = out[j] ?? 0;
+      out[j] = out[k] ?? 0;
+      out[k] = t;
+    }
+    j -= 1;
+  }
+  out
+}

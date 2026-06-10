@@ -1,0 +1,113 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// RandStream (the value tier): owned, independent, deterministic random streams.
+use random;
+
+fn main() {
+  r = random::seed_stream(7);
+  a = r.get(1, 1000000);
+  b = r.get(1, 1000000);
+  assert(a != b, "the stream advances through the receiver");
+}
+
+fn test_stream_in_range() {
+  r = random::seed_stream(42);
+  ok = true;
+  for _ in 0..200 {
+    v = r.get(10, 20);
+    if v < 10 || v > 20 { ok = false; }
+  }
+  assert(ok, "get stays in [10, 20]");
+}
+
+fn test_stream_single_value() {
+  r = random::seed_stream(1);
+  assert(r.get(7, 7) == 7, "single-value range returns it");
+}
+
+fn test_stream_invalid_range() {
+  r = random::seed_stream(1);
+  assert(!r.get(10, 5), "lo > hi is null (the global rand contract)");
+}
+
+fn test_stream_reproducible() {
+  r1 = random::seed_stream(99);
+  a = r1.get(0, 1000000);
+  b = r1.get(0, 1000000);
+  r2 = random::seed_stream(99);
+  assert(r2.get(0, 1000000) == a, "same seed: first draw matches");
+  assert(r2.get(0, 1000000) == b, "same seed: second draw matches");
+}
+
+fn test_streams_isolated() {
+  // THE property the global tier cannot give: drawing from one stream never
+  // perturbs another — interleaved draws equal the plain sequence.
+  plain = random::seed_stream(5);
+  p1 = plain.get(0, 1000000);
+  p2 = plain.get(0, 1000000);
+  p3 = plain.get(0, 1000000);
+  inter = random::seed_stream(5);
+  noise = random::seed_stream(777);
+  i1 = inter.get(0, 1000000);
+  noise.get(0, 1000000);
+  i2 = inter.get(0, 1000000);
+  noise.indices(20);
+  i3 = inter.get(0, 1000000);
+  assert(i1 == p1 && i2 == p2 && i3 == p3, "streams are isolated");
+}
+
+fn test_streams_decorrelated() {
+  a = random::seed_stream(1);
+  b = random::seed_stream(2);
+  diff = false;
+  for _ in 0..8 {
+    if a.get(0, 1000000) != b.get(0, 1000000) { diff = true; }
+  }
+  assert(diff, "different seeds give different streams");
+}
+
+fn test_stream_negative_seed() {
+  a = random::seed_stream(-12345);
+  v = a.get(0, 100);
+  assert(v >= 0 && v <= 100, "negative seeds are valid");
+  b = random::seed_stream(-12345);
+  assert(b.get(0, 100) == v, "and reproducible");
+}
+
+fn test_stream_indices_permutation() {
+  r = random::seed_stream(42);
+  n = 20;
+  v = r.indices(n);
+  assert(len(v) == n, "wrong size");
+  for expected in 0..n {
+    found = false;
+    for x in v { if x == expected { found = true } }
+    assert(found, "missing {expected}");
+  }
+}
+
+fn test_stream_indices_zero() {
+  r = random::seed_stream(1);
+  assert(len(r.indices(0)) == 0, "n = 0 is empty");
+}
+
+fn test_stream_indices_reproducible() {
+  r1 = random::seed_stream(123);
+  a = r1.indices(8);
+  r2 = random::seed_stream(123);
+  b = r2.indices(8);
+  same = true;
+  for i in 0..8 { if a[i] != b[i] { same = false } }
+  assert(same, "seeded indices reproducible");
+}
+
+fn test_stream_vs_global_independent() {
+  // a stream is untouched by the GLOBAL generator and vice versa
+  r1 = random::seed_stream(31);
+  random::rand_seed(1000);
+  a = r1.get(0, 1000000);
+  r2 = random::seed_stream(31);
+  random::rand_seed(2000);
+  random::rand(0, 10);
+  assert(r2.get(0, 1000000) == a, "global calls never move a stream");
+}

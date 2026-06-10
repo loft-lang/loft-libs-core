@@ -2,13 +2,21 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Random
 // @TITLE: Random numbers and random ordering
-// Loft provides three functions for randomness:
+// Loft provides two tiers of randomness:
 //
+// The GLOBAL tier (one shared generator — right for scripts and casual use):
 //   rand(lo, hi)      — a random integer in [lo, hi] inclusive.
 //   rand_seed(seed)   — seed the random number generator for reproducible results.
 //   rand_indices(n)   — a vector of n integers [0..n-1] in a random order.
 //
-// The generator is a fast PCG64 algorithm.
+// The VALUE tier (owned streams — when the RNG is part of your STATE: games,
+// simulations, replays; each stream is independent and travels with your data):
+//   seed_stream(seed) — an independent RandStream.
+//   r.get(lo, hi)     — a random integer in [lo, hi] from THIS stream.
+//   r.indices(n)      — a random permutation [0..n-1] from THIS stream.
+//
+// The global generator is a fast PCG64 algorithm; streams use L'Ecuyer's
+// combined LCG (pure loft, deterministic by construction).
 // Without an explicit seed the generator starts from a fixed default seed,
 // so results are reproducible across runs unless you seed with a time-based value.
 fn main() {
@@ -62,4 +70,23 @@ fn main() {
   }
   // 'picked' now contains 3 distinct fruit names in a random order.
   assert(len(picked) > 0, "should have picked some items: {picked}");
+
+  // ## Owned streams (the value tier)
+  // When the RNG is part of your STATE — a game that must replay, several
+  // simulations in one process — use streams instead of the global generator.
+  // Each stream is independent: drawing from one NEVER reorders another, and
+  // the state is a plain struct that saves and restores with your data.
+  world = seed_stream(2026);     // the level-generation stream
+  combat = seed_stream(7);       // the combat stream
+  layout = world.get(1, 100);
+  attack = combat.get(1, 20);    // does not disturb 'world'
+  layout2 = world.get(1, 100);
+  assert(layout >= 1 && layout <= 100 && layout2 >= 1 && layout2 <= 100, "in range");
+  assert(attack >= 1 && attack <= 20, "in range");
+  // same seed -> the same stream, always
+  replay = seed_stream(2026);
+  assert(replay.get(1, 100) == layout, "streams replay deterministically");
+  // a shuffled deck from a stream
+  deck = combat.indices(52);
+  assert(len(deck) == 52, "a full deck");
 }
