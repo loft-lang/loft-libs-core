@@ -1,7 +1,8 @@
 [package]
 name = "crypto"
-version = "0.2.0"
+version = "0.2.1"
 loft = ">=0.8"
+repository = "loft-libs-core"
 
 [library]
 entry = "src/crypto.loft"
