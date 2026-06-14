@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-use crypto::sha256, hmac_sha256, base64_encode, base64_decode;
+use crypto::(sha256, hmac_sha256, base64_encode, base64_decode);
 
 fn main() {
   digest = sha256("hello");
