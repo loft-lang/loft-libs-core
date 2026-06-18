@@ -48,3 +48,138 @@ pub fn base64_decode(data: text) -> text {
 pub fn base64url_encode(data: text) -> text {
   base64url_encode_native(data)
 }
+
+// --- v0.3: Ed25519 / X25519 / HPKE / AEAD / HKDF / CSPRNG ---
+//
+// Binary payloads (keys, nonces, ciphertexts, plaintexts) cross the FFI as
+// base64 text; multi-field calls pack their fields with '|' (outside the
+// base64 alphabet, so the split is unambiguous).  On error a function
+// returns "" and sets last_error() — check it after an empty result.
+// No homegrown crypto: every primitive is a vetted RustCrypto/dalek crate.
+
+// --- Internal natives ---
+
+fn crypto_random_native(spec: text) -> text;
+fn crypto_ed25519_keypair_native() -> text;
+fn crypto_ed25519_sign_native(packed: text) -> text;
+fn crypto_ed25519_verify_native(packed: text) -> boolean;
+fn crypto_x25519_keypair_native() -> text;
+fn crypto_x25519_dh_native(packed: text) -> text;
+fn crypto_hpke_seal_native(packed: text) -> text;
+fn crypto_hpke_open_native(packed: text) -> text;
+fn crypto_chacha_seal_native(packed: text) -> text;
+fn crypto_chacha_open_native(packed: text) -> text;
+fn crypto_xchacha_seal_native(packed: text) -> text;
+fn crypto_xchacha_open_native(packed: text) -> text;
+fn crypto_aes_seal_native(packed: text) -> text;
+fn crypto_aes_open_native(packed: text) -> text;
+fn crypto_hkdf_extract_native(packed: text) -> text;
+fn crypto_hkdf_expand_native(packed: text) -> text;
+fn crypto_last_error_native() -> text;
+
+// --- Public types ---
+
+pub struct Ed25519Keypair { sk: text, pk: text }
+pub struct X25519Keypair { sk: text, pk: text }
+pub struct HpkeSealed { enc: text, ct: text }
+
+// --- Public API ---
+
+// Human-readable description of the last crypto error on this thread, or "".
+pub fn last_error() -> text {
+  crypto_last_error_native()
+}
+
+// Cryptographically secure random bytes (0..=1048576), base64-encoded.
+pub fn random_bytes_b64(byte_count: integer) -> text {
+  crypto_random_native("{byte_count}")
+}
+
+// Generate an Ed25519 signing keypair (secret + public, base64, 32 bytes each).
+pub fn ed25519_keypair() -> Ed25519Keypair {
+  parts = crypto_ed25519_keypair_native().split('|');
+  if parts.len() < 2 { return Ed25519Keypair { sk: "", pk: "" }; }
+  Ed25519Keypair { sk: parts[0], pk: parts[1] }
+}
+
+// Sign a base64 message with a base64 Ed25519 secret key. Returns the
+// 64-byte signature, base64. Empty on error.
+pub fn ed25519_sign(secret_b64: text, message_b64: text) -> text {
+  crypto_ed25519_sign_native("{secret_b64}|{message_b64}")
+}
+
+// Verify an Ed25519 signature. True iff valid; never errors (malformed
+// input simply returns false).
+pub fn ed25519_verify(public_b64: text, message_b64: text, signature_b64: text) -> boolean {
+  crypto_ed25519_verify_native("{public_b64}|{message_b64}|{signature_b64}")
+}
+
+// Generate an X25519 keypair (for ECDH / HPKE).
+pub fn x25519_keypair() -> X25519Keypair {
+  parts = crypto_x25519_keypair_native().split('|');
+  if parts.len() < 2 { return X25519Keypair { sk: "", pk: "" }; }
+  X25519Keypair { sk: parts[0], pk: parts[1] }
+}
+
+// Raw X25519 Diffie-Hellman. Pipe the result through HKDF before using it
+// as a key (raw DH output is not a uniform key).
+pub fn x25519_dh(secret_b64: text, peer_public_b64: text) -> text {
+  crypto_x25519_dh_native("{secret_b64}|{peer_public_b64}")
+}
+
+// HPKE seal (RFC 9180, suite DHKEM(X25519,HKDF-SHA256)+HKDF-SHA256+ChaCha20Poly1305).
+// `info` binds the operation to a context; `aad` is authenticated but not
+// encrypted. Returns the encapsulated key + ciphertext (empty on error).
+pub fn hpke_seal(recipient_public_b64: text, info_b64: text, aad_b64: text, plaintext_b64: text) -> HpkeSealed {
+  parts = crypto_hpke_seal_native("{recipient_public_b64}|{info_b64}|{aad_b64}|{plaintext_b64}").split('|');
+  if parts.len() < 2 { return HpkeSealed { enc: "", ct: "" }; }
+  HpkeSealed { enc: parts[0], ct: parts[1] }
+}
+
+// HPKE open. Returns plaintext on success, "" on auth failure / any error.
+pub fn hpke_open(recipient_secret_b64: text, info_b64: text, aad_b64: text, enc_b64: text, ciphertext_b64: text) -> text {
+  crypto_hpke_open_native("{recipient_secret_b64}|{info_b64}|{aad_b64}|{enc_b64}|{ciphertext_b64}")
+}
+
+// AEAD ChaCha20-Poly1305. key=32B, nonce=12B (caller keeps nonces unique
+// per key). Output is ct||tag, base64.
+pub fn chacha20poly1305_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text {
+  crypto_chacha_seal_native("{key_b64}|{nonce_b64}|{aad_b64}|{plaintext_b64}")
+}
+
+// Open a ChaCha20-Poly1305 ct||tag. Returns plaintext, "" on auth failure.
+pub fn chacha20poly1305_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text {
+  crypto_chacha_open_native("{key_b64}|{nonce_b64}|{aad_b64}|{ciphertext_b64}")
+}
+
+// AEAD XChaCha20-Poly1305. key=32B, nonce=24B. The 192-bit nonce makes a
+// fresh RANDOM nonce per message safe (no 96-bit birthday limit) — use this
+// for the file/op body path where each encryption picks a random nonce.
+pub fn xchacha20poly1305_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text {
+  crypto_xchacha_seal_native("{key_b64}|{nonce_b64}|{aad_b64}|{plaintext_b64}")
+}
+
+// Open an XChaCha20-Poly1305 ct||tag. Returns plaintext, "" on auth failure.
+pub fn xchacha20poly1305_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text {
+  crypto_xchacha_open_native("{key_b64}|{nonce_b64}|{aad_b64}|{ciphertext_b64}")
+}
+
+// AEAD AES-256-GCM. key=32B, nonce=12B. Output is ct||tag, base64.
+pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text {
+  crypto_aes_seal_native("{key_b64}|{nonce_b64}|{aad_b64}|{plaintext_b64}")
+}
+
+// Open an AES-256-GCM ct||tag. Returns plaintext, "" on auth failure.
+pub fn aes256gcm_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text {
+  crypto_aes_open_native("{key_b64}|{nonce_b64}|{aad_b64}|{ciphertext_b64}")
+}
+
+// HKDF-extract over SHA-256. `salt` may be empty. Returns the 32-byte PRK.
+pub fn hkdf_extract_sha256(salt_b64: text, ikm_b64: text) -> text {
+  crypto_hkdf_extract_native("{salt_b64}|{ikm_b64}")
+}
+
+// HKDF-expand over SHA-256. `length` is 1..=8160. Returns `length` bytes, base64.
+pub fn hkdf_expand_sha256(prk_b64: text, info_b64: text, length: integer) -> text {
+  crypto_hkdf_expand_native("{prk_b64}|{info_b64}|{length}")
+}

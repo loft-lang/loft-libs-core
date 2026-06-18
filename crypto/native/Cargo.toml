@@ -1,6 +1,6 @@
 [package]
 name = "loft-crypto"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 license = "LGPL-3.0-or-later"
 
@@ -10,5 +10,24 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 loft-ffi = "0.1"
 
+# v0.3 public-key + AEAD + KDF + CSPRNG primitives — pure-Rust RustCrypto /
+# dalek crates (no openssl, no ring), so the cdylib cross-compiles to every
+# target in CROSS_PLATFORM.md without a C toolchain.
+ed25519-dalek    = { version = "2.1",  default-features = false, features = ["std", "rand_core", "fast"] }
+x25519-dalek     = { version = "2.0",  default-features = false, features = ["static_secrets", "alloc"] }
+hpke             = { version = "0.12", default-features = false, features = ["std", "x25519", "alloc"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["std", "alloc"] }
+aes-gcm          = { version = "0.10", default-features = false, features = ["std", "alloc", "aes"] }
+hkdf             = { version = "0.12", default-features = false, features = ["std"] }
+sha2             = { version = "0.10", default-features = false, features = ["std"] }
+rand_core        = { version = "0.6",  default-features = false, features = ["std", "getrandom"] }
+getrandom        = { version = "0.2",  default-features = false }
+zeroize          = { version = "1.7",  default-features = false, features = ["std", "derive"] }
+
 [build-dependencies]
 loft-ffi-build = "0.1"
+
+[features]
+default = []
+# Browser target (wasm32-unknown-unknown). Not needed for loft's wasm32-wasip2.
+wasm-js = ["getrandom/js"]
