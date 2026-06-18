@@ -36,6 +36,22 @@ fn match_start(pattern: text, input: text) -> integer;
 fn match_end(pattern: text, input: text) -> integer;
 #native
 
+// Capture groups of the FIRST match (group 0 = whole match, 1..n = captures).
+// `group_count` is 0 when there is no match; `group_text` returns the matched
+// substring of a group, or "" for a non-participating optional group / an
+// out-of-range index.  These drive the loft-side `match_groups` coroutine.
+fn group_count(pattern: text, input: text) -> integer;
+#native
+fn group_text(pattern: text, input: text, group: integer) -> text;
+#native
+
+// Replace the first / every match of `pattern` in `input` with `repl`
+// (`$1` / `$name` references supported).  One-shot — no coroutine.
+fn replace_first(pattern: text, input: text, repl: text) -> text;
+#native
+fn replace_all_raw(pattern: text, input: text, repl: text) -> text;
+#native
+
 // --- Public free functions (pattern-first, namespaced as `regex::`) ---
 
 // Byte offset of the first match of `pattern` in `input`, or null when
@@ -74,6 +90,36 @@ pub fn split(pattern: text, input: text) -> iterator<text> {
   yield from split_iter(pattern, input);
 }
 
+// (internal) Yield each capture group's text for the first match.  Distinct
+// name so unqualified calls inside this module resolve here.  A
+// non-participating optional group yields "".
+fn groups_iter(pattern: text, input: text) -> iterator<text> {
+  n = group_count(pattern, input);
+  i = 0;
+  while i < n {
+    yield group_text(pattern, input, i);
+    i = i + 1;
+  }
+}
+
+// Capture groups of the first match, yielded lazily: group 0 = whole match,
+// 1..n = captures (a non-participating optional group yields "").  Empty
+// iterator when the pattern does not match.
+pub fn match_groups(pattern: text, input: text) -> iterator<text> {
+  yield from groups_iter(pattern, input);
+}
+
+// `input` with the FIRST match of `pattern` replaced by `repl` (`$1`/`$name`
+// references).  A pattern that does not compile returns `input` unchanged.
+pub fn replace(pattern: text, input: text, repl: text) -> text {
+  replace_first(pattern, input, repl)
+}
+
+// `input` with EVERY non-overlapping match of `pattern` replaced by `repl`.
+pub fn replace_all(pattern: text, input: text, repl: text) -> text {
+  replace_all_raw(pattern, input, repl)
+}
+
 // --- Text methods (subject-first; call as  line.method(pattern) ) ---
 
 // True if `pattern` matches anywhere in the text.  `both` registers this as
@@ -96,4 +142,20 @@ pub fn regex_find(self: text, pattern: text) -> integer {
 // separator).  Call as  for piece in line.regex_split("[,;]") { }.
 pub fn regex_split(self: text, pattern: text) -> iterator<text> {
   yield from split_iter(pattern, self);
+}
+
+// Capture groups of the first match of `pattern` in the text, yielded lazily.
+// Call as  for g in line.regex_match_groups("(\\w+)=(\\w+)") { }.
+pub fn regex_match_groups(self: text, pattern: text) -> iterator<text> {
+  yield from groups_iter(pattern, self);
+}
+
+// Replace the first / every match of `pattern` in the text with `repl`.
+// Prefixed because bare `replace` collides with stdlib `text.replace`
+// (literal substring replace).
+pub fn regex_replace(self: text, pattern: text, repl: text) -> text {
+  replace_first(pattern, self, repl)
+}
+pub fn regex_replace_all(self: text, pattern: text, repl: text) -> text {
+  replace_all_raw(pattern, self, repl)
 }

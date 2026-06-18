@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 loft-ffi = "0.1"
+loft-ffi-macros = "0.1"
 
 # v0.3 public-key + AEAD + KDF + CSPRNG primitives — pure-Rust RustCrypto /
 # dalek crates (no openssl, no ring), so the cdylib cross-compiles to every
@@ -25,7 +26,7 @@ getrandom        = { version = "0.2",  default-features = false }
 zeroize          = { version = "1.7",  default-features = false, features = ["std", "derive"] }
 
 [build-dependencies]
-loft-ffi-build = "0.1"
+loft-ffi-build = "0.2"
 
 [features]
 default = []

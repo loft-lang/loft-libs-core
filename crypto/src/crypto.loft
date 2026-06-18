@@ -13,14 +13,19 @@
 // --- Internal natives ---
 
 fn sha256_native(data: text) -> text;
+#native "n_sha256"
 
 fn hmac_sha256_native(key: text, data: text) -> text;
+#native "n_hmac_sha256"
 
 fn base64_encode_native(data: text) -> text;
+#native "n_base64_encode"
 
 fn base64_decode_native(data: text) -> text;
+#native "n_base64_decode"
 
 fn base64url_encode_native(data: text) -> text;
+#native "n_base64url_encode"
 
 // --- Public API ---
 
@@ -60,22 +65,39 @@ pub fn base64url_encode(data: text) -> text {
 // --- Internal natives ---
 
 fn crypto_random_native(spec: text) -> text;
+#native "n_crypto_random"
 fn crypto_ed25519_keypair_native() -> text;
+#native "n_crypto_ed25519_keypair"
 fn crypto_ed25519_sign_native(packed: text) -> text;
+#native "n_crypto_ed25519_sign"
 fn crypto_ed25519_verify_native(packed: text) -> boolean;
+#native "n_crypto_ed25519_verify"
 fn crypto_x25519_keypair_native() -> text;
+#native "n_crypto_x25519_keypair"
 fn crypto_x25519_dh_native(packed: text) -> text;
+#native "n_crypto_x25519_dh"
 fn crypto_hpke_seal_native(packed: text) -> text;
+#native "n_crypto_hpke_seal"
 fn crypto_hpke_open_native(packed: text) -> text;
+#native "n_crypto_hpke_open"
 fn crypto_chacha_seal_native(packed: text) -> text;
+#native "n_crypto_chacha_seal"
 fn crypto_chacha_open_native(packed: text) -> text;
+#native "n_crypto_chacha_open"
 fn crypto_xchacha_seal_native(packed: text) -> text;
+#native "n_crypto_xchacha_seal"
 fn crypto_xchacha_open_native(packed: text) -> text;
+#native "n_crypto_xchacha_open"
 fn crypto_aes_seal_native(packed: text) -> text;
+#native "n_crypto_aes_seal"
 fn crypto_aes_open_native(packed: text) -> text;
+#native "n_crypto_aes_open"
 fn crypto_hkdf_extract_native(packed: text) -> text;
+#native "n_crypto_hkdf_extract"
 fn crypto_hkdf_expand_native(packed: text) -> text;
+#native "n_crypto_hkdf_expand"
 fn crypto_last_error_native() -> text;
+#native "n_crypto_last_error"
 
 // --- Public types ---
 

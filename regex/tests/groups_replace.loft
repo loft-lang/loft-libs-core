@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Regex Phase 1: match_groups (capture groups, via the coroutine channel) and
+// replace / replace_all — free functions AND text methods.
+fn main() {
+  // --- match_groups: free fn — group 0 = whole match, 1..n = captures ---
+  parts = "";
+  for g in regex::match_groups("([a-z]+)=([0-9]+)", "x=42") { parts = parts + g + "|"; }
+  assert(parts == "x=42|x|42|", "match_groups whole + 2 captures (got {parts})");
+
+  // --- match_groups: text method ---
+  mparts = "";
+  for g in "ab12".regex_match_groups("([a-z]+)([0-9]+)") { mparts = mparts + g + "|"; }
+  assert(mparts == "ab12|ab|12|", "regex_match_groups method (got {mparts})");
+
+  // --- match_groups: no match -> empty iterator ---
+  cnt = 0;
+  for g in regex::match_groups("[0-9]+", "abc") { cnt = cnt + 1; }
+  assert(cnt == 0, "match_groups no match -> empty (got {cnt})");
+
+  // --- match_groups: a non-participating optional group yields "" ---
+  oparts = "";
+  for g in regex::match_groups("(a)(b)?", "a") { oparts = oparts + g + "|"; }
+  assert(oparts == "a|a||", "optional group yields empty (got {oparts})");
+
+  // --- replace: FIRST match only ---
+  assert(regex::replace("[0-9]+", "a1b2c3", "#") == "a#b2c3", "replace first only");
+
+  // --- replace_all: every match ---
+  assert(regex::replace_all("[0-9]+", "a1b2c3", "#") == "a#b#c#", "replace_all");
+
+  // --- replace_all with a capture-group reference (${1}) ---
+  assert(regex::replace_all("([0-9])", "a1b2", "[${1}]") == "a[1]b[2]", "replace_all group ref");
+
+  // --- replace text methods ---
+  assert("a1b2".regex_replace("[0-9]", "X") == "aXb2", "regex_replace method (first)");
+  assert("a1b2".regex_replace_all("[0-9]", "X") == "aXbX", "regex_replace_all method");
+
+  // --- invalid pattern fails safely -> input returned unchanged ---
+  assert(regex::replace_all("(", "abc", "X") == "abc", "invalid pattern -> unchanged");
+
+  print("groups+replace ok");
+}

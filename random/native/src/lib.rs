@@ -16,6 +16,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 use loft_ffi::{LoftRef, LoftStore};
+use loft_ffi_macros::loft_native;
 use rand_core::{RngCore, SeedableRng};
 use rand_pcg::Pcg64;
 use std::cell::RefCell;
@@ -28,6 +29,7 @@ thread_local! {
     static RNG: RefCell<Pcg64> = RefCell::new(Pcg64::seed_from_u64(12345));
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_rand(lo: i64, hi: i64) -> i64 {
     // Null sentinel: i64::MIN.  Matches loft's `integer` null contract.
@@ -39,6 +41,7 @@ pub extern "C" fn n_rand(lo: i64, hi: i64) -> i64 {
     lo + (r % range) as i64
 }
 
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_rand_seed(seed: i64) {
     RNG.with(|rng| *rng.borrow_mut() = Pcg64::seed_from_u64(seed as u64));
@@ -47,6 +50,7 @@ pub extern "C" fn n_rand_seed(seed: i64) {
 /// Returns a vector of `n` integers `[0, 1, ..., n-1]` in random order.
 /// Allocates the vector directly in the loft store via the LoftStore handle.
 /// Returns a null `LoftRef` when `n <= 0` or `n == i64::MIN`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_rand_indices(mut store: LoftStore, n: i64) -> LoftRef {
     let count = if n == i64::MIN || n <= 0 {

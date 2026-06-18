@@ -17,6 +17,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 use loft_ffi::LoftStr;
+use loft_ffi_macros::loft_native;
 
 // v0.3 primitive deps (see the v0.3 section near the bottom of this file).
 // base64 (de)coding reuses the crate's own pure-Rust `base64` module below —
@@ -74,6 +75,7 @@ fn cr_ret(out: String) -> LoftStr {
 }
 
 /// `#native "n_sha256"` — hex-encoded SHA-256 of `data`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_sha256(data_ptr: *const u8, data_len: usize) -> LoftStr {
     let data = unsafe { cr_in(data_ptr, data_len) };
@@ -81,6 +83,7 @@ pub unsafe extern "C" fn n_sha256(data_ptr: *const u8, data_len: usize) -> LoftS
 }
 
 /// `#native "n_hmac_sha256"` — hex-encoded HMAC-SHA-256(key, data).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_hmac_sha256(
     key_ptr: *const u8,
@@ -94,6 +97,7 @@ pub unsafe extern "C" fn n_hmac_sha256(
 }
 
 /// `#native "n_base64_encode"` — standard base64 of `data`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_base64_encode(data_ptr: *const u8, data_len: usize) -> LoftStr {
     let data = unsafe { cr_in(data_ptr, data_len) };
@@ -101,6 +105,7 @@ pub unsafe extern "C" fn n_base64_encode(data_ptr: *const u8, data_len: usize) -
 }
 
 /// `#native "n_base64_decode"` — decode standard base64 `data` (lossy UTF-8).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_base64_decode(data_ptr: *const u8, data_len: usize) -> LoftStr {
     let data = unsafe { cr_in(data_ptr, data_len) };
@@ -109,6 +114,7 @@ pub unsafe extern "C" fn n_base64_decode(data_ptr: *const u8, data_len: usize) -
 }
 
 /// `#native "n_base64url_encode"` — URL-safe base64 (JWT-style, no padding).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_base64url_encode(data_ptr: *const u8, data_len: usize) -> LoftStr {
     let data = unsafe { cr_in(data_ptr, data_len) };
@@ -176,6 +182,7 @@ const HPKE_TAG_LEN: usize = 16;
 // ── 1. CSPRNG ───────────────────────────────────────────────────────
 
 /// `#native "n_crypto_random"` — base64 of `<count>` OS-CSPRNG bytes.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_random(ptr: *const u8, len: usize) -> LoftStr {
     let spec = unsafe { packed_str(ptr, len) };
@@ -196,6 +203,7 @@ pub unsafe extern "C" fn n_crypto_random(ptr: *const u8, len: usize) -> LoftStr 
 // ── 2. Ed25519 (RFC 8032) ───────────────────────────────────────────
 
 /// `#native "n_crypto_ed25519_keypair"` — `"<secret_b64>|<public_b64>"` (32B each).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_ed25519_keypair() -> LoftStr {
     let sk = SigningKey::generate(&mut OsRng);
@@ -204,6 +212,7 @@ pub unsafe extern "C" fn n_crypto_ed25519_keypair() -> LoftStr {
 }
 
 /// `#native "n_crypto_ed25519_sign"` — packed `secret|message` → signature (64B).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_ed25519_sign(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 2) {
@@ -221,6 +230,7 @@ pub unsafe extern "C" fn n_crypto_ed25519_sign(ptr: *const u8, len: usize) -> Lo
 }
 
 /// `#native "n_crypto_ed25519_verify"` — packed `public|message|signature` → bool.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_ed25519_verify(ptr: *const u8, len: usize) -> bool {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 3) {
@@ -243,6 +253,7 @@ pub unsafe extern "C" fn n_crypto_ed25519_verify(ptr: *const u8, len: usize) -> 
 // ── 3. X25519 (RFC 7748) ────────────────────────────────────────────
 
 /// `#native "n_crypto_x25519_keypair"` — `"<secret_b64>|<public_b64>"` (32B each).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_x25519_keypair() -> LoftStr {
     let sk = X25519Secret::random_from_rng(OsRng);
@@ -252,6 +263,7 @@ pub unsafe extern "C" fn n_crypto_x25519_keypair() -> LoftStr {
 
 /// `#native "n_crypto_x25519_dh"` — packed `secret|peer_public` → raw DH (32B).
 /// Pipe the result through HKDF before use as a key.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_x25519_dh(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 2) {
@@ -272,6 +284,7 @@ pub unsafe extern "C" fn n_crypto_x25519_dh(ptr: *const u8, len: usize) -> LoftS
 
 /// `#native "n_crypto_hpke_seal"` — packed `recipient_pub|info|aad|plaintext`
 /// → `"<enc_b64>|<ciphertext_with_tag_b64>"`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_hpke_seal(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 4) {
@@ -301,6 +314,7 @@ pub unsafe extern "C" fn n_crypto_hpke_seal(ptr: *const u8, len: usize) -> LoftS
 }
 
 /// `#native "n_crypto_hpke_open"` — packed `secret|info|aad|enc|ciphertext` → plaintext.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_hpke_open(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 5) {
@@ -342,6 +356,7 @@ pub unsafe extern "C" fn n_crypto_hpke_open(ptr: *const u8, len: usize) -> LoftS
 
 /// `#native "n_crypto_chacha_seal"` — packed `key|nonce|aad|plaintext` → ct||tag.
 /// key = 32B, nonce = 12B; caller MUST keep nonces unique per key.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_chacha_seal(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 4) {
@@ -362,6 +377,7 @@ pub unsafe extern "C" fn n_crypto_chacha_seal(ptr: *const u8, len: usize) -> Lof
 }
 
 /// `#native "n_crypto_chacha_open"` — packed `key|nonce|aad|ciphertext` → plaintext.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_chacha_open(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 4) {
@@ -390,6 +406,7 @@ pub unsafe extern "C" fn n_crypto_chacha_open(ptr: *const u8, len: usize) -> Lof
 
 /// `#native "n_crypto_xchacha_seal"` — packed `key|nonce|aad|plaintext` → ct||tag.
 /// key = 32B, nonce = 24B (random per message is safe).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_xchacha_seal(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 4) {
@@ -410,6 +427,7 @@ pub unsafe extern "C" fn n_crypto_xchacha_seal(ptr: *const u8, len: usize) -> Lo
 }
 
 /// `#native "n_crypto_xchacha_open"` — packed `key|nonce|aad|ciphertext` → plaintext.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_xchacha_open(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 4) {
@@ -432,6 +450,7 @@ pub unsafe extern "C" fn n_crypto_xchacha_open(ptr: *const u8, len: usize) -> Lo
 // ── 6. AEAD: AES-256-GCM ────────────────────────────────────────────
 
 /// `#native "n_crypto_aes_seal"` — packed `key|nonce|aad|plaintext` → ct||tag.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_aes_seal(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 4) {
@@ -452,6 +471,7 @@ pub unsafe extern "C" fn n_crypto_aes_seal(ptr: *const u8, len: usize) -> LoftSt
 }
 
 /// `#native "n_crypto_aes_open"` — packed `key|nonce|aad|ciphertext` → plaintext.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_aes_open(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 4) {
@@ -474,6 +494,7 @@ pub unsafe extern "C" fn n_crypto_aes_open(ptr: *const u8, len: usize) -> LoftSt
 // ── 7. HKDF over SHA-256 ────────────────────────────────────────────
 
 /// `#native "n_crypto_hkdf_extract"` — packed `salt|ikm` → 32-byte PRK. Salt may be empty.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_hkdf_extract(ptr: *const u8, len: usize) -> LoftStr {
     let f = match unpack(unsafe { packed_str(ptr, len) }, 2) {
@@ -487,6 +508,7 @@ pub unsafe extern "C" fn n_crypto_hkdf_extract(ptr: *const u8, len: usize) -> Lo
 
 /// `#native "n_crypto_hkdf_expand"` — packed `prk|info|<length>` → `length` bytes OKM.
 /// `length` is a plain decimal (1..=8160); `prk`/`info` are base64.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_hkdf_expand(ptr: *const u8, len: usize) -> LoftStr {
     let packed = unsafe { packed_str(ptr, len) };
@@ -517,6 +539,7 @@ pub unsafe extern "C" fn n_crypto_hkdf_expand(ptr: *const u8, len: usize) -> Lof
 // ── Diagnostics ─────────────────────────────────────────────────────
 
 /// `#native "n_crypto_last_error"` — last error on this thread, or "".
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_crypto_last_error() -> LoftStr {
     CRYPTO_ERR.with(|e| {

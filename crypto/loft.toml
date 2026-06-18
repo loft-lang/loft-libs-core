@@ -1,7 +1,8 @@
 [package]
 name = "crypto"
-version = "0.3.0"
+version = "0.3.1"
 loft = ">=0.8"
+repository = "loft-libs-core"
 
 [library]
 entry = "src/crypto.loft"
@@ -10,34 +11,6 @@ native = "loft_crypto"
 [native]
 crate = "loft-crypto"
 
-# @PLAN12 phase 2 (2026-05-24) — declarative source of truth for the
-# library's native `n_*` symbols.  Walked by `tests/extraction_hygiene.rs`
-# to auto-populate FORBIDDEN_LIBRARY_SYMBOLS.  Format:
-#   loft_fn_name = "n_<symbol>"
-# where `loft_fn_name` is the user-facing name in `src/<package>.loft`
-# (without the `n_` prefix) and the value is the C-ABI symbol exported
-# by `<crate>/src/lib.rs` via `loft_ffi::loft_register!`.
-[native.functions]
-sha256_native = "n_sha256"
-hmac_sha256_native = "n_hmac_sha256"
-base64_encode_native = "n_base64_encode"
-base64_decode_native = "n_base64_decode"
-base64url_encode_native = "n_base64url_encode"
-# v0.3 — Ed25519 / X25519 / HPKE / AEAD / HKDF / CSPRNG
-crypto_random_native = "n_crypto_random"
-crypto_ed25519_keypair_native = "n_crypto_ed25519_keypair"
-crypto_ed25519_sign_native = "n_crypto_ed25519_sign"
-crypto_ed25519_verify_native = "n_crypto_ed25519_verify"
-crypto_x25519_keypair_native = "n_crypto_x25519_keypair"
-crypto_x25519_dh_native = "n_crypto_x25519_dh"
-crypto_hpke_seal_native = "n_crypto_hpke_seal"
-crypto_hpke_open_native = "n_crypto_hpke_open"
-crypto_chacha_seal_native = "n_crypto_chacha_seal"
-crypto_chacha_open_native = "n_crypto_chacha_open"
-crypto_xchacha_seal_native = "n_crypto_xchacha_seal"
-crypto_xchacha_open_native = "n_crypto_xchacha_open"
-crypto_aes_seal_native = "n_crypto_aes_seal"
-crypto_aes_open_native = "n_crypto_aes_open"
-crypto_hkdf_extract_native = "n_crypto_hkdf_extract"
-crypto_hkdf_expand_native = "n_crypto_hkdf_expand"
-crypto_last_error_native = "n_crypto_last_error"
+# Plan-74: native symbols are declared by co-located `#native "n_*"`
+# annotations in `src/crypto.loft` (scanned by `loft-ffi-build`), so the
+# register list lives in exactly one place — no `[native.functions]` table.
