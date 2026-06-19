@@ -40,6 +40,21 @@ fn ed25519_sign_native(secret_key_b64: text, message_b64: text) -> text;
 fn ed25519_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
 #native "n_ed25519_verify"
 
+fn x25519_dh_native(secret_key_b64: text, public_key_b64: text) -> text;
+#native "n_x25519_dh"
+
+fn hkdf_sha256_native(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text;
+#native "n_hkdf_sha256"
+
+fn aes256gcm_seal_native(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text;
+#native "n_aes256gcm_seal"
+
+fn aes256gcm_open_native(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text;
+#native "n_aes256gcm_open"
+
+fn random_bytes_native(length: integer) -> text;
+#native "n_random_bytes"
+
 // --- Public API ---
 
 // SHA-256 hash of a string. Returns 64-char hex string.
@@ -90,4 +105,51 @@ pub fn ed25519_sign(secret_key_b64: text, message_b64: text) -> text {
 // Returns true iff the signature is valid.
 pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean {
   ed25519_verify_native(public_key_b64, message_b64, signature_b64)
+}
+
+// --- X25519 key agreement (RFC 7748) ---
+//
+// A secret key is a 32-byte X25519 scalar (base64); a public key is the
+// 32-byte u-coordinate (base64).  Returns the raw 32-byte shared secret
+// (base64), or "" if either input is the wrong length.  Run the result
+// through `hkdf_sha256` before using it as a key (RFC 7748 §6.1).
+pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text {
+  x25519_dh_native(secret_key_b64, public_key_b64)
+}
+
+// --- HKDF-SHA256 key derivation (RFC 5869) ---
+//
+// Derive `length` bytes of output keying material from `ikm`, `salt`, and
+// `info` (each base64).  An empty base64 `salt` selects the all-zero salt.
+// Returns the base64 OKM, or "" if `length` exceeds 255*32 or is <= 0.
+pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text {
+  hkdf_sha256_native(salt_b64, ikm_b64, info_b64, length)
+}
+
+// --- AES-256-GCM authenticated encryption ---
+//
+// All byte arguments are base64.  The key is 32 bytes and the nonce is 12
+// bytes (the standard 96-bit GCM IV).  A nonce MUST NOT be reused under one
+// key — derive a fresh one per message (e.g. random_bytes(12)).
+
+// Encrypt + authenticate `plaintext` under `key`/`nonce`, binding `aad`.
+// Returns base64 of ciphertext WITH the 16-byte tag appended, or "" on bad
+// key/nonce length.
+pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text {
+  aes256gcm_seal_native(key_b64, nonce_b64, aad_b64, plaintext_b64)
+}
+
+// Verify + decrypt `ciphertext` (ciphertext||tag, base64) under `key`/`nonce`,
+// binding `aad`.  Returns the base64 plaintext, or "" on ANY authentication
+// failure — an empty result means the ciphertext/tag/aad did not verify.
+pub fn aes256gcm_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text {
+  aes256gcm_open_native(key_b64, nonce_b64, aad_b64, ciphertext_b64)
+}
+
+// --- CSPRNG ---
+
+// Return `length` cryptographically secure random bytes (base64) from the OS
+// RNG.  Returns "" for length <= 0.  Use for keys (32), nonces (12), salts.
+pub fn random_bytes(length: integer) -> text {
+  random_bytes_native(length)
 }

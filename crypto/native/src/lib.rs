@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! Native crypto primitives for the `crypto` loft package.  SHA-256, HMAC,
-//! base64, and Ed25519 (RFC 8032) signatures.  The hashing / base64 symbols
-//! bridge to zero-dependency pure-Rust impls in `sha256.rs` / `base64.rs`;
-//! Ed25519 wraps the vetted `ed25519-dalek` crate in `ed25519.rs`.
+//! base64, Ed25519 (RFC 8032) signatures, X25519 (RFC 7748) key agreement,
+//! HKDF-SHA256 (RFC 5869), AES-256-GCM AEAD, and an OS CSPRNG.  The hashing /
+//! base64 symbols bridge to zero-dependency pure-Rust impls in `sha256.rs` /
+//! `base64.rs`; the asymmetric, KDF, AEAD, and RNG primitives wrap the vetted
+//! RustCrypto + dalek crates (`ed25519.rs`, `x25519.rs`, `hkdf.rs`,
+//! `aes256gcm.rs`, `random.rs`).
 //!
 //! Every exported `n_*` fn carries `#[loft_native]`, so the build script emits
 //! a `loft_register_bridges_v1` table and the interpreter dispatches through
@@ -19,9 +22,13 @@
 use loft_ffi::LoftStr;
 use loft_ffi_macros::loft_native;
 
+mod aes256gcm;
 mod base64;
 mod ed25519;
+mod hkdf;
+mod random;
 mod sha256;
+mod x25519;
 
 thread_local! {
     static CRYPTO_BUF: std::cell::RefCell<String> =
@@ -149,6 +156,112 @@ pub unsafe extern "C" fn n_ed25519_verify(
     let msg = unsafe { std::str::from_utf8(cr_in(msg_ptr, msg_len)).unwrap_or("") };
     let sig = unsafe { std::str::from_utf8(cr_in(sig_ptr, sig_len)).unwrap_or("") };
     ed25519::verify(pk, msg, sig)
+}
+
+// ── X25519 ECDH (RFC 7748) — text-only base64 API ──────────────────────
+//
+// A loft secret key is a 32-byte X25519 scalar (base64); a public key is the
+// 32-byte u-coordinate (base64); the shared secret is the raw 32-byte DH
+// output (base64).  Wrong-length input returns "" (lenient convention).
+
+/// `#native "n_x25519_dh"` — 32-byte X25519 shared secret (base64) from our
+/// secret scalar (base64, 32B) and the peer's public key (base64, 32B); ""
+/// if either is the wrong length.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_x25519_dh(
+    sk_ptr: *const u8,
+    sk_len: usize,
+    pk_ptr: *const u8,
+    pk_len: usize,
+) -> LoftStr {
+    let sk = unsafe { std::str::from_utf8(cr_in(sk_ptr, sk_len)).unwrap_or("") };
+    let pk = unsafe { std::str::from_utf8(cr_in(pk_ptr, pk_len)).unwrap_or("") };
+    cr_ret(x25519::dh(sk, pk))
+}
+
+// ── HKDF-SHA256 (RFC 5869) — text-only base64 API ──────────────────────
+//
+// salt / ikm / info are base64 bytes; the okm is base64.  An empty base64
+// salt selects the RFC 5869 §2.2 all-zero salt.  `length` is the OKM byte
+// count; "" if it exceeds 255*32 or is non-positive.
+
+/// `#native "n_hkdf_sha256"` — `length` bytes of HKDF-SHA256 OKM (base64) from
+/// salt/ikm/info (each base64); "" if length > 255*32 or length <= 0.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_hkdf_sha256(
+    salt_ptr: *const u8,
+    salt_len: usize,
+    ikm_ptr: *const u8,
+    ikm_len: usize,
+    info_ptr: *const u8,
+    info_len: usize,
+    length: i32,
+) -> LoftStr {
+    let salt = unsafe { std::str::from_utf8(cr_in(salt_ptr, salt_len)).unwrap_or("") };
+    let ikm = unsafe { std::str::from_utf8(cr_in(ikm_ptr, ikm_len)).unwrap_or("") };
+    let info = unsafe { std::str::from_utf8(cr_in(info_ptr, info_len)).unwrap_or("") };
+    cr_ret(hkdf::sha256(salt, ikm, info, length))
+}
+
+// ── AES-256-GCM AEAD — text-only base64 API ────────────────────────────
+//
+// key (32B) / nonce (12B) / aad / plaintext|ciphertext are base64.  `seal`
+// returns ciphertext||tag (16-byte tag appended); `open` returns "" on any
+// authentication failure.  A nonce MUST NOT repeat under one key.
+
+/// `#native "n_aes256gcm_seal"` — base64 of (ciphertext||16-byte-tag) for
+/// `plaintext` under key (32B)/nonce (12B), binding `aad`; "" on bad lengths.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_aes256gcm_seal(
+    key_ptr: *const u8,
+    key_len: usize,
+    nonce_ptr: *const u8,
+    nonce_len: usize,
+    aad_ptr: *const u8,
+    aad_len: usize,
+    pt_ptr: *const u8,
+    pt_len: usize,
+) -> LoftStr {
+    let key = unsafe { std::str::from_utf8(cr_in(key_ptr, key_len)).unwrap_or("") };
+    let nonce = unsafe { std::str::from_utf8(cr_in(nonce_ptr, nonce_len)).unwrap_or("") };
+    let aad = unsafe { std::str::from_utf8(cr_in(aad_ptr, aad_len)).unwrap_or("") };
+    let pt = unsafe { std::str::from_utf8(cr_in(pt_ptr, pt_len)).unwrap_or("") };
+    cr_ret(aes256gcm::seal(key, nonce, aad, pt))
+}
+
+/// `#native "n_aes256gcm_open"` — base64 plaintext for `ciphertext`
+/// (ciphertext||tag, base64) under key (32B)/nonce (12B), binding `aad`; ""
+/// on authentication failure or bad lengths.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_aes256gcm_open(
+    key_ptr: *const u8,
+    key_len: usize,
+    nonce_ptr: *const u8,
+    nonce_len: usize,
+    aad_ptr: *const u8,
+    aad_len: usize,
+    ct_ptr: *const u8,
+    ct_len: usize,
+) -> LoftStr {
+    let key = unsafe { std::str::from_utf8(cr_in(key_ptr, key_len)).unwrap_or("") };
+    let nonce = unsafe { std::str::from_utf8(cr_in(nonce_ptr, nonce_len)).unwrap_or("") };
+    let aad = unsafe { std::str::from_utf8(cr_in(aad_ptr, aad_len)).unwrap_or("") };
+    let ct = unsafe { std::str::from_utf8(cr_in(ct_ptr, ct_len)).unwrap_or("") };
+    cr_ret(aes256gcm::open(key, nonce, aad, ct))
+}
+
+// ── CSPRNG — OS random bytes ────────────────────────────────────────────
+
+/// `#native "n_random_bytes"` — `length` OS-CSPRNG random bytes (base64); ""
+/// for length <= 0 or an OS RNG failure.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_random_bytes(length: i32) -> LoftStr {
+    cr_ret(random::bytes(length))
 }
 
 // The `loft_register!` + `loft_register_bridges!` invocations are generated by

@@ -11,10 +11,27 @@ crate-type = ["cdylib", "rlib"]
 loft-ffi = "0.1"
 loft-ffi-macros = "0.1"
 
-# Ed25519 (RFC 8032) signatures — the vetted pure-Rust dalek crate (no
-# openssl / ring), so the cdylib cross-compiles without a C toolchain.
-# `from_bytes` + `sign` + `verify` need no RNG, so no rand_core/getrandom.
+# Asymmetric / KDF / AEAD primitives — the vetted pure-Rust RustCrypto + dalek
+# stack (no openssl / ring), so the cdylib cross-compiles without a C
+# toolchain.  Minimal features: only `std` where it removes a `no_std` cost.
+
+# Ed25519 (RFC 8032) signatures.  `from_bytes` + `sign` + `verify` need no RNG.
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast"] }
+
+# X25519 (RFC 7748) Diffie-Hellman.  `StaticSecret::from(bytes)` +
+# `diffie_hellman` need no RNG, so no rand_core feature.
+x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets"] }
+
+# HKDF-SHA256 (RFC 5869) key derivation.
+hkdf = "0.12"
+sha2 = "0.10"
+
+# AES-256-GCM AEAD (RFC 5116 / NIST SP 800-38D).  `aes` software backend is
+# pure Rust; `aead` brings the `Aead`/`Payload` traits.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+
+# OS CSPRNG for `random_bytes` — reads getrandom(2) / /dev/urandom etc.
+getrandom = "0.2"
 
 [build-dependencies]
 loft-ffi-build = "0.2"

@@ -1,0 +1,157 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Known-answer tests for the asymmetric / KDF / AEAD primitives.  Every
+// vector is the official published one, base64-encoded, so a KAT only passes
+// if the native impl computes the real RFC/NIST/Wycheproof value:
+//
+//   X25519       — RFC 7748 §6.1 (Alice/Bob example).
+//   HKDF-SHA256  — RFC 5869 Appendix A, Test Case 1 and Test Case 3.
+//   AES-256-GCM  — Project Wycheproof aes_gcm_test.json tcId 91 (keySize 256,
+//                  ivSize 96, tagSize 128, result "valid").
+
+use crypto;
+
+// ── X25519 ECDH — RFC 7748 §6.1 ──────────────────────────────────────
+//
+//   alice_priv = 77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a
+//   alice_pub  = 8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a
+//   bob_priv   = 5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb
+//   bob_pub    = de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f
+//   shared K   = 4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742
+
+fn test_x25519_rfc7748_alice_derives_shared() {
+  alice_priv = "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=";
+  bob_pub = "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=";
+  shared = crypto::x25519_dh(alice_priv, bob_pub);
+  assert(shared == "Sl2dW6TOLeFyjjv0gDUPJeB+IclH0Z4zdvCbPB4WF0I=",
+         "x25519 RFC7748 Alice shared secret: {shared}");
+}
+
+fn test_x25519_rfc7748_bob_derives_same_shared() {
+  bob_priv = "XasIfmJKikt54X+Lg4AO5m87sSkmGLb9HC+LJ/+I4Os=";
+  alice_pub = "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=";
+  shared = crypto::x25519_dh(bob_priv, alice_pub);
+  assert(shared == "Sl2dW6TOLeFyjjv0gDUPJeB+IclH0Z4zdvCbPB4WF0I=",
+         "x25519 RFC7748 Bob shared secret: {shared}");
+}
+
+fn test_x25519_both_sides_agree() {
+  // The defining ECDH property: dh(a, B) == dh(b, A).
+  alice_priv = "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=";
+  alice_pub = "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=";
+  bob_priv = "XasIfmJKikt54X+Lg4AO5m87sSkmGLb9HC+LJ/+I4Os=";
+  bob_pub = "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=";
+  a = crypto::x25519_dh(alice_priv, bob_pub);
+  b = crypto::x25519_dh(bob_priv, alice_pub);
+  assert(a == b, "x25519 both sides must agree: {a} vs {b}");
+}
+
+fn test_x25519_malformed_input_is_safe() {
+  // Wrong-length secret → "" rather than a halt.
+  empty = crypto::x25519_dh("dG9vc2hvcnQ=", "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=");
+  assert(empty == "", "x25519_dh on a short secret returns empty");
+}
+
+// ── HKDF-SHA256 — RFC 5869 Appendix A ────────────────────────────────
+//
+//   IKM = 0b * 22 ;  L = 42
+//   Case 1: salt=000102030405060708090a0b0c  info=f0f1f2f3f4f5f6f7f8f9
+//           OKM = 3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db0
+//                 2d56ecc4c5bf34007208d5b887185865
+//   Case 3: salt=(empty)  info=(empty)
+//           OKM = 8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec345
+//                 4e5f3c738d2d9d201395faa4b61a96c8
+
+fn test_hkdf_sha256_rfc5869_case1() {
+  salt = "AAECAwQFBgcICQoLDA==";
+  ikm = "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCw==";
+  info = "8PHy8/T19vf4+Q==";
+  okm = crypto::hkdf_sha256(salt, ikm, info, 42);
+  assert(okm == "PLJfJfqs1XqQQ09k0DYvKi0tCpDPGlpMXbAtVuzExb80AHII1biHGFhl",
+         "hkdf RFC5869 case1 OKM: {okm}");
+}
+
+fn test_hkdf_sha256_rfc5869_case3_empty_salt_info() {
+  ikm = "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCw==";
+  // Empty base64 salt selects the RFC 5869 §2.2 all-zero salt; empty info.
+  okm = crypto::hkdf_sha256("", ikm, "", 42);
+  assert(okm == "jaTndaVjwY9xX4AqBjxaMbihH1xe4Yeew0VOXzxzjS2dIBOV+qS2GpbI",
+         "hkdf RFC5869 case3 OKM: {okm}");
+}
+
+fn test_hkdf_sha256_excessive_length_is_safe() {
+  salt = "AAECAwQFBgcICQoLDA==";
+  ikm = "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCw==";
+  // 255 * 32 = 8160 is the HKDF-SHA256 ceiling; 8161 must return "".
+  out = crypto::hkdf_sha256(salt, ikm, "", 8161);
+  assert(out == "", "hkdf over the 255*HashLen ceiling returns empty");
+}
+
+// ── AES-256-GCM — Wycheproof tcId 91 ─────────────────────────────────
+//
+//   key = 92ace3e348cd821092cd921aa3546374299ab46209691bc28b8752d17f123c20
+//   iv  = 00112233445566778899aabb
+//   aad = 00000000ffffffff
+//   msg = 00010203040506070809
+//   ct  = e27abdd2d2a53d2f136b
+//   tag = 9a4a2579529301bcfb71c78d4060f52c
+
+fn test_aes256gcm_seal_matches_wycheproof_tc91() {
+  key = "kqzj40jNghCSzZIao1RjdCmatGIJaRvCi4dS0X8SPCA=";
+  nonce = "ABEiM0RVZneImaq7";
+  aad = "AAAAAP////8=";
+  plaintext = "AAECAwQFBgcICQ==";
+  // Expected = base64(ciphertext || 16-byte tag).
+  sealed = crypto::aes256gcm_seal(key, nonce, aad, plaintext);
+  assert(sealed == "4nq90tKlPS8Ta5pKJXlSkwG8+3HHjUBg9Sw=",
+         "aes256gcm seal must match Wycheproof tc91: {sealed}");
+}
+
+fn test_aes256gcm_open_round_trips_wycheproof_tc91() {
+  key = "kqzj40jNghCSzZIao1RjdCmatGIJaRvCi4dS0X8SPCA=";
+  nonce = "ABEiM0RVZneImaq7";
+  aad = "AAAAAP////8=";
+  ct_and_tag = "4nq90tKlPS8Ta5pKJXlSkwG8+3HHjUBg9Sw=";
+  plaintext = crypto::aes256gcm_open(key, nonce, aad, ct_and_tag);
+  assert(plaintext == "AAECAwQFBgcICQ==",
+         "aes256gcm open must recover the Wycheproof tc91 plaintext: {plaintext}");
+}
+
+fn test_aes256gcm_open_rejects_tampered_tag() {
+  key = "kqzj40jNghCSzZIao1RjdCmatGIJaRvCi4dS0X8SPCA=";
+  nonce = "ABEiM0RVZneImaq7";
+  aad = "AAAAAP////8=";
+  // The tc91 blob with the final tag byte 0x2c flipped to 0x2d.
+  tampered = "4nq90tKlPS8Ta5pKJXlSkwG8+3HHjUBg9S0=";
+  out = crypto::aes256gcm_open(key, nonce, aad, tampered);
+  assert(out == "", "aes256gcm open must reject a tampered tag (empty result)");
+}
+
+fn test_aes256gcm_open_rejects_wrong_aad() {
+  key = "kqzj40jNghCSzZIao1RjdCmatGIJaRvCi4dS0X8SPCA=";
+  nonce = "ABEiM0RVZneImaq7";
+  ct_and_tag = "4nq90tKlPS8Ta5pKJXlSkwG8+3HHjUBg9Sw=";
+  // Authentic ciphertext, but AAD altered (last byte ff -> fe) → must fail.
+  out = crypto::aes256gcm_open(key, nonce, "AAAAAP////4=", ct_and_tag);
+  assert(out == "", "aes256gcm open must reject a changed AAD");
+}
+
+fn test_aes256gcm_seal_open_round_trip() {
+  // A fresh key + nonce from the CSPRNG, then seal/open arbitrary data.
+  key = crypto::random_bytes(32);
+  nonce = crypto::random_bytes(12);
+  aad = "Y29udGV4dA=="; // "context"
+  plaintext = "aGVsbG8gd29ybGQ="; // "hello world"
+  sealed = crypto::aes256gcm_seal(key, nonce, aad, plaintext);
+  assert(sealed != "", "aes256gcm seal with a random key/nonce must succeed");
+  opened = crypto::aes256gcm_open(key, nonce, aad, sealed);
+  assert(opened == plaintext, "aes256gcm round-trip must recover the plaintext: {opened}");
+}
+
+fn test_aes256gcm_malformed_input_is_safe() {
+  // Wrong-length key → "" rather than a halt.
+  nonce = "ABEiM0RVZneImaq7";
+  out = crypto::aes256gcm_seal("dG9vc2hvcnQ=", nonce, "", "AAECAwQFBgcICQ==");
+  assert(out == "", "aes256gcm_seal on a short key returns empty");
+}

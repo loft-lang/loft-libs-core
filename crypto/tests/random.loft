@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Tests for the OS CSPRNG.  A randomness source has no fixed known-answer
+// vector, so these check the testable contract: the output length is exactly
+// as requested, two independent draws differ, and length 0 is empty.
+//
+// Length is checked on the BASE64 STRING, not the decoded bytes: standard
+// base64 with padding encodes n raw bytes as exactly ceil(n/3)*4 characters,
+// which is deterministic.  Decoding back to bytes is avoided because the
+// library's `base64_decode` is UTF-8-lossy (random non-UTF-8 octets become a
+// 3-byte replacement char), so a decoded length would not equal n.
+
+use crypto;
+
+fn test_random_bytes_length_32() {
+  out = crypto::random_bytes(32);
+  assert(out != "", "random_bytes(32) must be non-empty");
+  // 32 bytes → ceil(32/3)=11 base64 groups → 44 chars.
+  n = out.len();
+  assert(n == 44, "random_bytes(32) must encode to 44 base64 chars, got {n}");
+}
+
+fn test_random_bytes_length_12() {
+  out = crypto::random_bytes(12);
+  // 12 bytes → ceil(12/3)=4 base64 groups → 16 chars.
+  n = out.len();
+  assert(n == 16, "random_bytes(12) must encode to 16 base64 chars, got {n}");
+}
+
+fn test_random_bytes_length_1() {
+  out = crypto::random_bytes(1);
+  // 1 byte → 1 base64 group with two pad chars → 4 chars.
+  n = out.len();
+  assert(n == 4, "random_bytes(1) must encode to 4 base64 chars, got {n}");
+}
+
+fn test_random_bytes_two_calls_differ() {
+  // Two 32-byte CSPRNG draws colliding has probability ~2^-256.
+  a = crypto::random_bytes(32);
+  b = crypto::random_bytes(32);
+  assert(a != b, "two random_bytes(32) draws must differ");
+}
+
+fn test_random_bytes_zero_is_empty() {
+  out = crypto::random_bytes(0);
+  assert(out == "", "random_bytes(0) must be empty");
+}
+
+fn test_random_bytes_negative_is_empty() {
+  out = crypto::random_bytes(-5);
+  assert(out == "", "random_bytes(-5) must be empty");
+}
