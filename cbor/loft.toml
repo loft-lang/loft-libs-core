@@ -1,0 +1,16 @@
+[package]
+name = "cbor"
+version = "0.1.0"
+loft = ">=0.8"
+repository = "loft-libs-core"
+
+[library]
+entry = "src/cbor.loft"
+
+# Pure loft — no [native] crate. CBOR's byte format is encoded directly over
+# vector<u8>, so the codec runs identically on every target (native == wasm by
+# construction) with no FFI bridge and no external-crate trust surface.  See
+# loft-lang/plans#83.
+
+[triggers]
+enabled = true

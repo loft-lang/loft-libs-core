@@ -1,0 +1,105 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- CBOR ---
+// Canonical CBOR (RFC 8949) for loft, in pure loft.
+//
+// CBOR is a compact, binary, self-describing serialisation — like JSON but
+// with native byte strings and a *deterministic* (canonical) form.  This
+// library targets the signable-record use case: the same value always encodes
+// to byte-identical output, so a signature over those bytes is stable across
+// implementations and across targets.
+//
+// Pure loft by design (loft-lang/plans#83): the byte format is simple enough to
+// assemble directly over `vector<u8>`, so there is no native crate, no FFI
+// bridge, and no external-crate trust surface — and the codec runs identically
+// native and in the browser (native == wasm) by construction.
+//
+// Build a `CborValue` and `encode` it; the canonical encoder picks shortest-form
+// integer/length heads.  (Map-key canonical ordering, decode, and the typed
+// `T.to_cbor()` path land in later phases — see the plan.)
+
+/// A dynamic CBOR value.  Mirrors the stdlib `JsonValue`, with CBOR's extra
+/// `CBytes` (native byte string) and the integer split that CBOR makes at the
+/// wire level folded into one signed `CInt`.
+pub enum CborValue {
+  CNull,
+  CBool  { value: boolean },
+  CInt   { value: integer not null },   // >=0 -> major 0 (uint); <0 -> major 1 (negint)
+  CBytes { value: vector<u8> },
+  CText  { value: text },
+  CArray { items: vector<CborValue> },
+  CMap   { entries: vector<CborEntry> },
+}
+
+/// One key/value pair of a `CMap`.
+pub struct CborEntry {
+  key: CborValue,
+  value: CborValue,
+}
+
+// Canonical head: the major type (0..7) plus the SHORTEST-form encoding of
+// `arg` (RFC 8949 §4.2.1).  Lengths and integer payloads share this routine.
+fn head(major: integer, arg: integer) -> vector<u8> {
+  buf: vector<u8> = [];
+  if arg < 24 {
+    buf += [(major * 32 + arg) as u8];
+  } else if arg < 256 {
+    buf += [(major * 32 + 24) as u8];
+    buf += [arg as u8];
+  } else if arg < 65536 {
+    buf += [(major * 32 + 25) as u8];
+    buf += [(arg / 256) as u8];
+    buf += [(arg % 256) as u8];
+  } else if arg < 4294967296 {
+    buf += [(major * 32 + 26) as u8];
+    buf += [(arg / 16777216 % 256) as u8];
+    buf += [(arg / 65536 % 256) as u8];
+    buf += [(arg / 256 % 256) as u8];
+    buf += [(arg % 256) as u8];
+  } else {
+    buf += [(major * 32 + 27) as u8];
+    buf += [(arg / 72057594037927936 % 256) as u8];
+    buf += [(arg / 281474976710656 % 256) as u8];
+    buf += [(arg / 1099511627776 % 256) as u8];
+    buf += [(arg / 4294967296 % 256) as u8];
+    buf += [(arg / 16777216 % 256) as u8];
+    buf += [(arg / 65536 % 256) as u8];
+    buf += [(arg / 256 % 256) as u8];
+    buf += [(arg % 256) as u8];
+  }
+  return buf;
+}
+
+/// Encode a `CborValue` to canonical CBOR bytes.
+pub fn encode(v: CborValue) -> vector<u8> {
+  match v {
+    CNull => head(7, 22),                                   // 0xf6
+    CBool { value } => head(7, if value { 21 } else { 20 }), // 0xf5 / 0xf4
+    CInt { value } => if value >= 0 { head(0, value) } else { head(1, 0 - value - 1) },
+    CBytes { value } => {
+      buf = head(2, len(value));
+      buf += value;
+      buf
+    },
+    CText { value } => {
+      n = len(value);
+      buf = head(3, n);
+      for i in 0..n { buf += [value.byte_at(i) as u8]; }
+      buf
+    },
+    CArray { items } => {
+      buf = head(4, len(items));
+      for i in 0..len(items) { buf += encode(items[i]); }
+      buf
+    },
+    CMap { entries } => {
+      // NOTE: emits in insertion order; canonical key sort is phase A2.
+      buf = head(5, len(entries));
+      for i in 0..len(entries) {
+        buf += encode(entries[i].key);
+        buf += encode(entries[i].value);
+      }
+      buf
+    },
+  }
+}
