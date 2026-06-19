@@ -9,6 +9,13 @@ fn bytes_eq(a: vector<u8>, b: vector<u8>) -> boolean {
   return true;
 }
 
+// encode -> decode -> encode must be byte-identical (A3 round-trip property).
+fn roundtrip(v: CborValue) -> boolean {
+  d = decode(encode(v));
+  if !d.ok { return false; }
+  return bytes_eq(encode(d.value), encode(v));
+}
+
 fn main() {
   // unsigned integers (major 0), shortest-form heads
   assert(bytes_eq(encode(CInt { value: 0 }),    [0x00 as u8]), "uint 0");
@@ -56,6 +63,24 @@ fn main() {
       CborEntry { key: CInt { value: 24 },  value: CInt { value: 2 } } ] }),
     [0xa3 as u8, 0x0a as u8, 0x01 as u8, 0x18 as u8, 0x18 as u8, 0x02 as u8,
      0x18 as u8, 0x64 as u8, 0x00 as u8]), "map canonical mixed-length");
+
+  // --- decode (A3): encode -> decode -> encode byte-identity (text excluded
+  // until the text_from_bytes primitive lands) ---
+  assert(roundtrip(CInt { value: 0 }),         "rt uint 0");
+  assert(roundtrip(CInt { value: 1000000 }),   "rt uint 1000000");
+  assert(roundtrip(CInt { value: 0 - 100 }),   "rt negint -100");
+  assert(roundtrip(CBool { value: true }),     "rt true");
+  assert(roundtrip(CNull),                     "rt null");
+  assert(roundtrip(CBytes { value: [1 as u8, 2 as u8, 3 as u8, 4 as u8] }), "rt bytes");
+  assert(roundtrip(CArray { items: [CInt { value: 1 }, CInt { value: 2 }, CInt { value: 3 }] }), "rt array");
+  // MAP round-trip is blocked on loft-lang/loft#406 (appending a CborEntry built
+  // from decoded — i.e. variable — CborValues corrupts the enum discriminant) and
+  // TEXT round-trip on the pending `text_from_bytes` stdlib primitive.  The decode
+  // code for both is present in src/cbor.loft and lands the moment those clear.
+  // malformed / non-canonical / trailing — ok=false, never a crash
+  assert(!decode([0x18 as u8]).ok,             "truncated rejected");
+  assert(!decode([0x18 as u8, 0x00 as u8]).ok, "overlong head rejected");
+  assert(!decode([0x00 as u8, 0x00 as u8]).ok, "trailing bytes rejected");
 
   println("cbor: all RFC 8949 vectors pass");
 }
