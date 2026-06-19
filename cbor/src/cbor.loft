@@ -148,13 +148,6 @@ pub struct Decoded {
   ok:    boolean,
 }
 
-// Build a CText from raw UTF-8 bytes.  A4 follow-up wires this to a stdlib
-// `text_from_bytes` primitive (the inverse of `byte_at`); for now text decode
-// is a structural placeholder so the container/integer/byte paths land first.
-fn text_from_bytes(bytes: vector<u8>) -> text {
-  return "";
-}
-
 // Decode one CBOR value starting at `pos`.  Recursive: arrays/maps thread the
 // running position through their children.  Enforces canonical shortest-form
 // heads (an overlong argument is rejected) and definite lengths only.

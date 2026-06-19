@@ -73,10 +73,12 @@ fn main() {
   assert(roundtrip(CNull),                     "rt null");
   assert(roundtrip(CBytes { value: [1 as u8, 2 as u8, 3 as u8, 4 as u8] }), "rt bytes");
   assert(roundtrip(CArray { items: [CInt { value: 1 }, CInt { value: 2 }, CInt { value: 3 }] }), "rt array");
-  // MAP round-trip is blocked on loft-lang/loft#406 (appending a CborEntry built
-  // from decoded — i.e. variable — CborValues corrupts the enum discriminant) and
-  // TEXT round-trip on the pending `text_from_bytes` stdlib primitive.  The decode
-  // code for both is present in src/cbor.loft and lands the moment those clear.
+  // TEXT decode now works via the stdlib `text_from_bytes` primitive
+  assert(roundtrip(CText { value: "IETF" }),  "rt text");
+  assert(roundtrip(CText { value: "héllo" }), "rt text utf8");
+  // MAP round-trip stays blocked on loft-lang/loft#406 (appending a CborEntry
+  // built from decoded — i.e. variable — CborValues corrupts the enum
+  // discriminant); the decode code is present and lands the moment #406 clears.
   // malformed / non-canonical / trailing — ok=false, never a crash
   assert(!decode([0x18 as u8]).ok,             "truncated rejected");
   assert(!decode([0x18 as u8, 0x00 as u8]).ok, "overlong head rejected");
