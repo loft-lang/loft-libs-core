@@ -10,3 +10,6 @@
 
 # macOS Finder cruft
 .DS_Store
+
+# per-package loft dependency lock (regenerated)
+*/loft.lock

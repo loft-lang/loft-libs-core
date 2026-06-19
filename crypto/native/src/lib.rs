@@ -19,13 +19,14 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use loft_ffi::LoftStr;
+use loft_ffi::{LoftRef, LoftStore, LoftStr};
 use loft_ffi_macros::loft_native;
 
 mod aes256gcm;
 mod base64;
 mod ed25519;
 mod hkdf;
+mod hpke_bytes;
 mod random;
 mod sha256;
 mod x25519;
@@ -203,6 +204,83 @@ pub unsafe extern "C" fn n_hkdf_sha256(
     let ikm = unsafe { std::str::from_utf8(cr_in(ikm_ptr, ikm_len)).unwrap_or("") };
     let info = unsafe { std::str::from_utf8(cr_in(info_ptr, info_len)).unwrap_or("") };
     cr_ret(hkdf::sha256(salt, ikm, info, length))
+}
+
+/// `#native "n_hkdf_extract"` — HKDF-Extract: the 32-byte PRK (base64)
+/// `HMAC-SHA256(salt, ikm)`.  An empty base64 `salt` selects the all-zero salt.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_hkdf_extract(
+    salt_ptr: *const u8,
+    salt_len: usize,
+    ikm_ptr: *const u8,
+    ikm_len: usize,
+) -> LoftStr {
+    let salt = unsafe { std::str::from_utf8(cr_in(salt_ptr, salt_len)).unwrap_or("") };
+    let ikm = unsafe { std::str::from_utf8(cr_in(ikm_ptr, ikm_len)).unwrap_or("") };
+    cr_ret(hkdf::extract(salt, ikm))
+}
+
+/// `#native "n_hkdf_expand"` — HKDF-Expand from an existing 32-byte PRK:
+/// `length` bytes of OKM (base64); "" on a short PRK, length > 255*32, or
+/// length <= 0.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_hkdf_expand(
+    prk_ptr: *const u8,
+    prk_len: usize,
+    info_ptr: *const u8,
+    info_len: usize,
+    length: i32,
+) -> LoftStr {
+    let prk = unsafe { std::str::from_utf8(cr_in(prk_ptr, prk_len)).unwrap_or("") };
+    let info = unsafe { std::str::from_utf8(cr_in(info_ptr, info_len)).unwrap_or("") };
+    cr_ret(hkdf::expand(prk, info, length))
+}
+
+// ── Raw-byte <-> base64 bridges (for HPKE labeled-string composition) ───
+//
+// loft `text` is UTF-8-validated, so non-UTF-8 byte strings (DH outputs,
+// PRKs, the labeled `suite_id` bytes) cannot ride as `text`.  loft assembles
+// them in a `vector<u8>` and crosses the base64 boundary through these two
+// inverse bridges.  The `LoftStore` first param is supplied by the bridge.
+
+/// `#native "n_bytes_to_base64"` — standard base64 `text` of a `vector<u8>`.
+/// A null / empty vector encodes to "".
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_bytes_to_base64(store: LoftStore, bytes: LoftRef) -> LoftStr {
+    cr_ret(unsafe { hpke_bytes::encode(&store, &bytes) })
+}
+
+/// `#native "n_base64_to_bytes"` — `vector<u8>` from standard base64 `text`.
+/// A malformed or empty string yields an empty vector.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_base64_to_bytes(
+    mut store: LoftStore,
+    b64_ptr: *const u8,
+    b64_len: usize,
+) -> LoftRef {
+    let b64 = unsafe { std::str::from_utf8(cr_in(b64_ptr, b64_len)).unwrap_or("") };
+    unsafe { hpke_bytes::decode(&mut store, b64) }
+}
+
+/// `#native "n_bytes_concat_b64"` — base64 of `bytes(a) || bytes(b)`.
+///
+/// Text-in / text-out (no store interaction), so loft assembles labeled byte
+/// strings by repeated concatenation without a store-allocated `vector<u8>`.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_bytes_concat_b64(
+    a_ptr: *const u8,
+    a_len: usize,
+    b_ptr: *const u8,
+    b_len: usize,
+) -> LoftStr {
+    let a = unsafe { std::str::from_utf8(cr_in(a_ptr, a_len)).unwrap_or("") };
+    let b = unsafe { std::str::from_utf8(cr_in(b_ptr, b_len)).unwrap_or("") };
+    cr_ret(hpke_bytes::concat_b64(a, b))
 }
 
 // ── AES-256-GCM AEAD — text-only base64 API ────────────────────────────
