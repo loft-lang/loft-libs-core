@@ -70,6 +70,46 @@ fn head(major: integer, arg: integer) -> vector<u8> {
   return buf;
 }
 
+// Bytewise lexicographic less-than over two byte strings (RFC 8949 §4.2.1
+// canonical map-key order): at the first differing byte the smaller byte wins;
+// a proper prefix sorts before the longer string.
+fn byte_lt(a: vector<u8>, b: vector<u8>) -> boolean {
+  na = len(a);
+  nb = len(b);
+  m = if na < nb { na } else { nb };
+  for i in 0..m {
+    if a[i] != b[i] { return a[i] < b[i]; }
+  }
+  return na < nb;
+}
+
+// Encode a map with its entries in canonical key order: keys compared by their
+// deterministic encodings, bytewise (RFC 8949 §4.2.1).  Emits each entry at the
+// position equal to its key's RANK (how many keys sort before it) — a formulation
+// that uses only append + read (no marker array, no vector element assignment,
+// no nested vectors), so it codegens identically on the interpreter and --native.
+// O(n^3), which is fine: a signable record's maps are small.
+fn encode_map(entries: vector<CborEntry>) -> vector<u8> {
+  n = len(entries);
+  buf = head(5, n);
+  for target in 0..n {
+    for i in 0..n {
+      ki = encode(entries[i].key);
+      rank = 0;
+      for j in 0..n {
+        if j != i {
+          if byte_lt(encode(entries[j].key), ki) { rank = rank + 1; }
+        }
+      }
+      if rank == target {
+        buf += ki;
+        buf += encode(entries[i].value);
+      }
+    }
+  }
+  return buf;
+}
+
 /// Encode a `CborValue` to canonical CBOR bytes.
 pub fn encode(v: CborValue) -> vector<u8> {
   match v {
@@ -92,14 +132,6 @@ pub fn encode(v: CborValue) -> vector<u8> {
       for i in 0..len(items) { buf += encode(items[i]); }
       buf
     },
-    CMap { entries } => {
-      // NOTE: emits in insertion order; canonical key sort is phase A2.
-      buf = head(5, len(entries));
-      for i in 0..len(entries) {
-        buf += encode(entries[i].key);
-        buf += encode(entries[i].value);
-      }
-      buf
-    },
+    CMap { entries } => encode_map(entries),
   }
 }

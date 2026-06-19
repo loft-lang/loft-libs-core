@@ -42,5 +42,20 @@ fn main() {
       CborEntry { key: CInt { value: 3 }, value: CInt { value: 4 } } ] }),
     [0xa2 as u8, 0x01 as u8, 0x02 as u8, 0x03 as u8, 0x04 as u8]), "map 1to2 3to4");
 
+  // canonical map-key ordering (RFC 8949 §4.2.1): out-of-order keys encode sorted
+  assert(bytes_eq(
+    encode(CMap { entries: [
+      CborEntry { key: CInt { value: 3 }, value: CInt { value: 4 } },
+      CborEntry { key: CInt { value: 1 }, value: CInt { value: 2 } } ] }),
+    [0xa2 as u8, 0x01 as u8, 0x02 as u8, 0x03 as u8, 0x04 as u8]), "map canonical reorder");
+  // mixed-length keys sort BYTEWISE: 10 (0x0a) < 24 (0x18 18) < 100 (0x18 64)
+  assert(bytes_eq(
+    encode(CMap { entries: [
+      CborEntry { key: CInt { value: 100 }, value: CInt { value: 0 } },
+      CborEntry { key: CInt { value: 10 },  value: CInt { value: 1 } },
+      CborEntry { key: CInt { value: 24 },  value: CInt { value: 2 } } ] }),
+    [0xa3 as u8, 0x0a as u8, 0x01 as u8, 0x18 as u8, 0x18 as u8, 0x02 as u8,
+     0x18 as u8, 0x64 as u8, 0x00 as u8]), "map canonical mixed-length");
+
   println("cbor: all RFC 8949 vectors pass");
 }
