@@ -4,5 +4,9 @@
 # loft package output tarballs (per-package, regenerated on `loft package`)
 *.tar.gz
 
+# test-runner logs + generated native FFI bridge (regenerated on `loft test`/`--native`)
+*/tests/.loft/
+*/native-auto/
+
 # macOS Finder cruft
 .DS_Store

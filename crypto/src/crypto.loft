@@ -11,16 +11,34 @@
 // coverage (RS256/ES256) and a full sign+verify+claim API.
 
 // --- Internal natives ---
+//
+// Each `#native "n_*"` symbol is supplied by the `native/` cdylib via a
+// `#[loft_native]` bridge; `loft-ffi-build` scans these annotations to emit
+// the cdylib's register list, so the bindings can never drift.
 
 fn sha256_native(data: text) -> text;
+#native "n_sha256"
 
 fn hmac_sha256_native(key: text, data: text) -> text;
+#native "n_hmac_sha256"
 
 fn base64_encode_native(data: text) -> text;
+#native "n_base64_encode"
 
 fn base64_decode_native(data: text) -> text;
+#native "n_base64_decode"
 
 fn base64url_encode_native(data: text) -> text;
+#native "n_base64url_encode"
+
+fn ed25519_public_key_native(secret_key_b64: text) -> text;
+#native "n_ed25519_public_key"
+
+fn ed25519_sign_native(secret_key_b64: text, message_b64: text) -> text;
+#native "n_ed25519_sign"
+
+fn ed25519_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
+#native "n_ed25519_verify"
 
 // --- Public API ---
 
@@ -47,4 +65,29 @@ pub fn base64_decode(data: text) -> text {
 // Base64url encode (JWT-safe, no padding).
 pub fn base64url_encode(data: text) -> text {
   base64url_encode_native(data)
+}
+
+// --- Ed25519 signatures (RFC 8032) ---
+//
+// All key / message / signature bytes are standard base64 `text`.  A secret
+// key is the RFC 8032 32-byte seed (base64); the public key (32B) and
+// signature (64B) are the canonical encodings.  Malformed input never halts:
+// `ed25519_public_key` / `ed25519_sign` return "" and `ed25519_verify`
+// returns false.
+
+// Derive the 32-byte public key (base64) from a 32-byte secret seed (base64).
+pub fn ed25519_public_key(secret_key_b64: text) -> text {
+  ed25519_public_key_native(secret_key_b64)
+}
+
+// Sign the base64 `message` bytes with the 32-byte secret seed (base64).
+// Returns the 64-byte signature, base64.
+pub fn ed25519_sign(secret_key_b64: text, message_b64: text) -> text {
+  ed25519_sign_native(secret_key_b64, message_b64)
+}
+
+// Verify a signature over the base64 `message` bytes under a public key.
+// Returns true iff the signature is valid.
+pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean {
+  ed25519_verify_native(public_key_b64, message_b64, signature_b64)
 }

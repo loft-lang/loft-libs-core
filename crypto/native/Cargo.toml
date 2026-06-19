@@ -9,6 +9,12 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 loft-ffi = "0.1"
+loft-ffi-macros = "0.1"
+
+# Ed25519 (RFC 8032) signatures — the vetted pure-Rust dalek crate (no
+# openssl / ring), so the cdylib cross-compiles without a C toolchain.
+# `from_bytes` + `sign` + `verify` need no RNG, so no rand_core/getrandom.
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast"] }
 
 [build-dependencies]
-loft-ffi-build = "0.1"
+loft-ffi-build = "0.2"
