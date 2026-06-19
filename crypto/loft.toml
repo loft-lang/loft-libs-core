@@ -14,3 +14,15 @@ crate = "loft-crypto"
 # Native `n_*` symbols are declared by co-located `#native "n_*"` annotations
 # in `src/crypto.loft` (scanned by `loft-ffi-build`), so the register list
 # lives in exactly one place — no `[native.functions]` table to drift.
+
+# Browser-WASM bridge for `loft --html`.  `crypto::sha256` is a plain
+# `text -> text` native: it routes through the `wasm/` bridge crate's pure-Rust
+# `crypto_sha256` entry point, with NO Reference-out reshape (loft #407 — the
+# clean text-return bridge convention).  More primitives join `routes` as their
+# pure-Rust / host-backed bridges are added.
+[wasm.bridge]
+crate = "crypto-wasm"
+host_js = "wasm/host.js"
+
+[wasm.bridge.routes]
+n_sha256 = "crypto_sha256"
