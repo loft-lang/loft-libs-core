@@ -154,7 +154,7 @@ pub struct Decoded {
 fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
   n = len(bytes);
   if pos >= n { return Decoded { value: CNull, next: pos, ok: false }; }
-  b = bytes[pos];
+  b = bytes[pos] ?? 0;
   major = b / 32;
   info = b % 32;
   // --- argument (length / integer payload), canonical shortest-form ---
@@ -165,23 +165,23 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
     arg = info;
   } else if info == 24 {
     if argpos >= n { argok = false; }
-    else { arg = bytes[argpos]; argpos = argpos + 1; if arg < 24 { argok = false; } }
+    else { arg = bytes[argpos] ?? 0; argpos = argpos + 1; if arg < 24 { argok = false; } }
   } else if info == 25 {
     if argpos + 1 >= n { argok = false; }
-    else { arg = bytes[argpos] * 256 + bytes[argpos + 1]; argpos = argpos + 2; if arg < 256 { argok = false; } }
+    else { arg = (bytes[argpos] ?? 0) * 256 + (bytes[argpos + 1] ?? 0); argpos = argpos + 2; if arg < 256 { argok = false; } }
   } else if info == 26 {
     if argpos + 3 >= n { argok = false; }
     else {
-      arg = ((bytes[argpos] * 256 + bytes[argpos + 1]) * 256 + bytes[argpos + 2]) * 256 + bytes[argpos + 3];
+      arg = (((bytes[argpos] ?? 0) * 256 + (bytes[argpos + 1] ?? 0)) * 256 + (bytes[argpos + 2] ?? 0)) * 256 + (bytes[argpos + 3] ?? 0);
       argpos = argpos + 4;
       if arg < 65536 { argok = false; }
     }
   } else if info == 27 {
     if argpos + 7 >= n { argok = false; }
-    else if bytes[argpos] >= 128 { argok = false; }   // exceeds i64 range
+    else if (bytes[argpos] ?? 0) >= 128 { argok = false; }   // exceeds i64 range
     else {
-      arg = bytes[argpos];
-      for k in 1..8 { arg = arg * 256 + bytes[argpos + k]; }
+      arg = bytes[argpos] ?? 0;
+      for k in 1..8 { arg = arg * 256 + (bytes[argpos + k] ?? 0); }
       argpos = argpos + 8;
       if arg < 4294967296 { argok = false; }
     }
@@ -195,13 +195,13 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
   if major == 2 {
     if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
     bs: vector<u8> = [];
-    for k in 0..arg { bs += [bytes[argpos + k]]; }
+    for k in 0..arg { kb = bytes[argpos + k] ?? (0 as u8); bs += [kb]; }
     return Decoded { value: CBytes { value: bs }, next: argpos + arg, ok: true };
   }
   if major == 3 {
     if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
     tb: vector<u8> = [];
-    for k in 0..arg { tb += [bytes[argpos + k]]; }
+    for k in 0..arg { kb = bytes[argpos + k] ?? (0 as u8); tb += [kb]; }
     return Decoded { value: CText { value: text_from_bytes(tb) }, next: argpos + arg, ok: true };
   }
   if major == 4 {
