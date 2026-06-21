@@ -70,6 +70,17 @@ pub unsafe extern "C" fn n_sha256(data_ptr: *const u8, data_len: usize) -> LoftS
     cr_ret(cr_hex(&sha256::sha256(data)))
 }
 
+/// `#native "n_sha256_b64"` — base64-encoded SHA-256 of the *raw bytes* decoded from
+/// the base64 input. Lets callers hash arbitrary byte strings (ciphertext, canonical
+/// CBOR) that are not valid UTF-8 and so cannot be carried as a loft `text`.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_sha256_b64(data_ptr: *const u8, data_len: usize) -> LoftStr {
+    let b64 = unsafe { std::str::from_utf8(cr_in(data_ptr, data_len)).unwrap_or("") };
+    let bytes = base64::decode(b64);
+    cr_ret(base64::encode(&sha256::sha256(&bytes)))
+}
+
 /// `#native "n_hmac_sha256"` — hex-encoded HMAC-SHA-256(key, data).
 #[loft_native]
 #[unsafe(no_mangle)]

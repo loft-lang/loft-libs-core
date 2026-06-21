@@ -19,6 +19,9 @@
 fn sha256_native(data: text) -> text;
 #native "n_sha256"
 
+fn sha256_b64_native(data_b64: text) -> text;
+#native "n_sha256_b64"
+
 fn hmac_sha256_native(key: text, data: text) -> text;
 #native "n_hmac_sha256"
 
@@ -75,6 +78,13 @@ fn random_bytes_native(length: integer) -> text;
 // SHA-256 hash of a string. Returns 64-char hex string.
 pub fn sha256(data: text) -> text {
   sha256_native(data)
+}
+
+// SHA-256 of the RAW BYTES decoded from base64 `data_b64`. Returns base64 of the
+// 32-byte digest. Use this to hash arbitrary byte strings (ciphertext, canonical
+// CBOR) that are not valid UTF-8 and so cannot be passed to `sha256` as text.
+pub fn sha256_b64(data_b64: text) -> text {
+  sha256_b64_native(data_b64)
 }
 
 // HMAC-SHA256 of data with key. Returns 64-char hex string.
