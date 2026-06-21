@@ -43,5 +43,6 @@ n_ed25519_verify = "crypto_ed25519_verify"
 n_x25519_dh = "crypto_x25519_dh"
 n_aes256gcm_seal = "crypto_aes256gcm_seal"
 n_aes256gcm_open = "crypto_aes256gcm_open"
-# random_bytes is NOT routed yet — it needs OS entropy (a synchronous
-# getRandomValues host import), not a pure-compute bridge.
+# random_bytes — the one HOST-IMPORT bridge: OS entropy via the synchronous
+# crypto.getRandomValues (host.js `loft_crypto.random_fill`).
+n_random_bytes = "crypto_random_bytes"

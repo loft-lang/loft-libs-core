@@ -28,9 +28,10 @@
 //! `hkdf` crate; here it is a pure-Rust RFC-5869 expansion over the shared
 //! `hmac_sha256`, pinned to the RFC 5869 Appendix-A vectors on both backends.
 //!
-//! Still NOT routed: `random_bytes` — it needs OS entropy, which on wasm means a
-//! synchronous `getRandomValues` host import (host.js), the one non-pure-compute
-//! bridge; that lands next.
+//! `random_bytes` is the one HOST-IMPORT bridge (not pure compute): it needs OS
+//! entropy, which on wasm is the synchronous `crypto.getRandomValues` exposed by
+//! `wasm/host.js` as the `loft_crypto.random_fill` import — the one Web Crypto call
+//! that is not a Promise, so it fits loft's synchronous host ABI.
 
 #![allow(dead_code)] // exposed for codegen-emitted call sites
 
@@ -215,4 +216,33 @@ pub fn crypto_aes256gcm_open(
     ct_b64: &str,
 ) -> String {
     aes256gcm::open(key_b64, nonce_b64, aad_b64, ct_b64)
+}
+
+// ── CSPRNG — random_bytes via a synchronous getRandomValues host import ──────
+
+// Host import: fill `[ptr, ptr+len)` of wasm linear memory with CSPRNG bytes.
+// Provided by `wasm/host.js` via the browser's synchronous `crypto.getRandomValues`
+// — the one Web Crypto call that is NOT a Promise, so it suits loft's synchronous
+// host ABI (unlike `crypto.subtle.*`, which would need asyncify — that is B2).
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "loft_crypto")]
+unsafe extern "C" {
+    fn random_fill(ptr: *mut u8, len: usize);
+}
+
+/// `crypto::random_bytes(length) -> text` — base64 of `length` CSPRNG bytes; "" for
+/// `length <= 0`.  On wasm the entropy is the host's `crypto.getRandomValues`; a
+/// non-wasm build (never exercised — native uses the cdylib's OsRng) leaves the
+/// buffer zeroed, kept only so the bridge crate compiles for `cargo check`.
+pub fn crypto_random_bytes(_stores: &mut Stores, length: i32) -> String {
+    if length <= 0 {
+        return String::new();
+    }
+    let mut buf = vec![0u8; length as usize];
+    // SAFETY: the host fills exactly `buf.len()` bytes at the buffer's pointer.
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        random_fill(buf.as_mut_ptr(), buf.len());
+    }
+    base64::encode(&buf)
 }
