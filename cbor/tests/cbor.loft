@@ -64,8 +64,7 @@ fn main() {
     [0xa3 as u8, 0x0a as u8, 0x01 as u8, 0x18 as u8, 0x18 as u8, 0x02 as u8,
      0x18 as u8, 0x64 as u8, 0x00 as u8]), "map canonical mixed-length");
 
-  // --- decode (A3): encode -> decode -> encode byte-identity (text excluded
-  // until the text_from_bytes primitive lands) ---
+  // --- decode (A3): encode -> decode -> encode byte-identity, all value types ---
   assert(roundtrip(CInt { value: 0 }),         "rt uint 0");
   assert(roundtrip(CInt { value: 1000000 }),   "rt uint 1000000");
   assert(roundtrip(CInt { value: 0 - 100 }),   "rt negint -100");
@@ -76,9 +75,13 @@ fn main() {
   // TEXT decode now works via the stdlib `text_from_bytes` primitive
   assert(roundtrip(CText { value: "IETF" }),  "rt text");
   assert(roundtrip(CText { value: "héllo" }), "rt text utf8");
-  // MAP round-trip stays blocked on loft-lang/loft#406 (appending a CborEntry
-  // built from decoded — i.e. variable — CborValues corrupts the enum
-  // discriminant); the decode code is present and lands the moment #406 clears.
+  // MAP round-trip (loft#406 fixed): out-of-order keys re-sort canonically on re-encode
+  assert(roundtrip(CMap { entries: [
+    CborEntry { key: CInt { value: 1 }, value: CInt { value: 2 } },
+    CborEntry { key: CInt { value: 3 }, value: CText { value: "x" } } ] }), "rt map");
+  assert(roundtrip(CMap { entries: [
+    CborEntry { key: CInt { value: 3 }, value: CInt { value: 4 } },
+    CborEntry { key: CInt { value: 1 }, value: CInt { value: 2 } } ] }), "rt map canonical");
   // malformed / non-canonical / trailing — ok=false, never a crash
   assert(!decode([0x18 as u8]).ok,             "truncated rejected");
   assert(!decode([0x18 as u8, 0x00 as u8]).ok, "overlong head rejected");
