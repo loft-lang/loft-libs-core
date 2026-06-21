@@ -1,6 +1,6 @@
 [package]
 name = "crypto"
-version = "0.2.1"
+version = "0.3.2"
 loft = ">=0.8"
 repository = "loft-libs-core"
 
@@ -11,16 +11,38 @@ native = "loft_crypto"
 [native]
 crate = "loft-crypto"
 
-# @PLAN12 phase 2 (2026-05-24) — declarative source of truth for the
-# library's native `n_*` symbols.  Walked by `tests/extraction_hygiene.rs`
-# to auto-populate FORBIDDEN_LIBRARY_SYMBOLS.  Format:
-#   loft_fn_name = "n_<symbol>"
-# where `loft_fn_name` is the user-facing name in `src/<package>.loft`
-# (without the `n_` prefix) and the value is the C-ABI symbol exported
-# by `<crate>/src/lib.rs` via `loft_ffi::loft_register!`.
-[native.functions]
-sha256_native = "n_sha256"
-hmac_sha256_native = "n_hmac_sha256"
-base64_encode_native = "n_base64_encode"
-base64_decode_native = "n_base64_decode"
-base64url_encode_native = "n_base64url_encode"
+# Native `n_*` symbols are declared by co-located `#native "n_*"` annotations
+# in `src/crypto.loft` (scanned by `loft-ffi-build`), so the register list
+# lives in exactly one place — no `[native.functions]` table to drift.
+
+# Browser-WASM bridge for `loft --html`.  Each routed `#native` runs through the
+# `wasm/` bridge crate's pure-Rust entry point, with NO Reference-out reshape for
+# text returns (loft #407 — the clean text-return bridge convention).  Hashing +
+# base64 share the native crate's zero-dep modules (native == wasm by construction);
+# HKDF is a pure-Rust RFC-5869 re-impl over the shared HMAC.
+[wasm.bridge]
+crate = "crypto-wasm"
+host_js = "wasm/host.js"
+
+[wasm.bridge.routes]
+# Hashing + base64 — shared zero-dep modules (native == wasm by construction).
+n_sha256 = "crypto_sha256"
+n_hmac_sha256 = "crypto_hmac_sha256"
+n_base64_encode = "crypto_base64_encode"
+n_base64_decode = "crypto_base64_decode"
+n_base64url_encode = "crypto_base64url_encode"
+# HKDF-SHA256 — pure-loft-safe re-impl over the shared hmac_sha256, RFC-5869-pinned.
+n_hkdf_sha256 = "crypto_hkdf_sha256"
+n_hkdf_extract = "crypto_hkdf_extract"
+n_hkdf_expand = "crypto_hkdf_expand"
+# Ed25519 / X25519 / AES-256-GCM — SHARED dalek/RustCrypto modules, compiled to
+# wasm via the build-extension (`-L dependency` from this crate's Cargo deps).
+n_ed25519_public_key = "crypto_ed25519_public_key"
+n_ed25519_sign = "crypto_ed25519_sign"
+n_ed25519_verify = "crypto_ed25519_verify"
+n_x25519_dh = "crypto_x25519_dh"
+n_aes256gcm_seal = "crypto_aes256gcm_seal"
+n_aes256gcm_open = "crypto_aes256gcm_open"
+# random_bytes — the one HOST-IMPORT bridge: OS entropy via the synchronous
+# crypto.getRandomValues (host.js `loft_crypto.random_fill`).
+n_random_bytes = "crypto_random_bytes"

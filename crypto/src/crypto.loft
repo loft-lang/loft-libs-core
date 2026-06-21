@@ -11,16 +11,64 @@
 // coverage (RS256/ES256) and a full sign+verify+claim API.
 
 // --- Internal natives ---
+//
+// Each `#native "n_*"` symbol is supplied by the `native/` cdylib via a
+// `#[loft_native]` bridge; `loft-ffi-build` scans these annotations to emit
+// the cdylib's register list, so the bindings can never drift.
 
 fn sha256_native(data: text) -> text;
+#native "n_sha256"
 
 fn hmac_sha256_native(key: text, data: text) -> text;
+#native "n_hmac_sha256"
 
 fn base64_encode_native(data: text) -> text;
+#native "n_base64_encode"
 
 fn base64_decode_native(data: text) -> text;
+#native "n_base64_decode"
 
 fn base64url_encode_native(data: text) -> text;
+#native "n_base64url_encode"
+
+fn ed25519_public_key_native(secret_key_b64: text) -> text;
+#native "n_ed25519_public_key"
+
+fn ed25519_sign_native(secret_key_b64: text, message_b64: text) -> text;
+#native "n_ed25519_sign"
+
+fn ed25519_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
+#native "n_ed25519_verify"
+
+fn x25519_dh_native(secret_key_b64: text, public_key_b64: text) -> text;
+#native "n_x25519_dh"
+
+fn hkdf_sha256_native(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text;
+#native "n_hkdf_sha256"
+
+fn hkdf_extract_native(salt_b64: text, ikm_b64: text) -> text;
+#native "n_hkdf_extract"
+
+fn hkdf_expand_native(prk_b64: text, info_b64: text, length: integer) -> text;
+#native "n_hkdf_expand"
+
+fn bytes_to_base64_native(bytes: vector<u8>) -> text;
+#native "n_bytes_to_base64"
+
+fn base64_to_bytes_native(b64: text) -> vector<u8>;
+#native "n_base64_to_bytes"
+
+fn bytes_concat_b64_native(a_b64: text, b_b64: text) -> text;
+#native "n_bytes_concat_b64"
+
+fn aes256gcm_seal_native(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text;
+#native "n_aes256gcm_seal"
+
+fn aes256gcm_open_native(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text;
+#native "n_aes256gcm_open"
+
+fn random_bytes_native(length: integer) -> text;
+#native "n_random_bytes"
 
 // --- Public API ---
 
@@ -47,4 +95,332 @@ pub fn base64_decode(data: text) -> text {
 // Base64url encode (JWT-safe, no padding).
 pub fn base64url_encode(data: text) -> text {
   base64url_encode_native(data)
+}
+
+// --- Ed25519 signatures (RFC 8032) ---
+//
+// All key / message / signature bytes are standard base64 `text`.  A secret
+// key is the RFC 8032 32-byte seed (base64); the public key (32B) and
+// signature (64B) are the canonical encodings.  Malformed input never halts:
+// `ed25519_public_key` / `ed25519_sign` return "" and `ed25519_verify`
+// returns false.
+
+// Derive the 32-byte public key (base64) from a 32-byte secret seed (base64).
+pub fn ed25519_public_key(secret_key_b64: text) -> text {
+  ed25519_public_key_native(secret_key_b64)
+}
+
+// Sign the base64 `message` bytes with the 32-byte secret seed (base64).
+// Returns the 64-byte signature, base64.
+pub fn ed25519_sign(secret_key_b64: text, message_b64: text) -> text {
+  ed25519_sign_native(secret_key_b64, message_b64)
+}
+
+// Verify a signature over the base64 `message` bytes under a public key.
+// Returns true iff the signature is valid.
+pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean {
+  ed25519_verify_native(public_key_b64, message_b64, signature_b64)
+}
+
+// --- X25519 key agreement (RFC 7748) ---
+//
+// A secret key is a 32-byte X25519 scalar (base64); a public key is the
+// 32-byte u-coordinate (base64).  Returns the raw 32-byte shared secret
+// (base64), or "" if either input is the wrong length.  Run the result
+// through `hkdf_sha256` before using it as a key (RFC 7748 §6.1).
+pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text {
+  x25519_dh_native(secret_key_b64, public_key_b64)
+}
+
+// --- HKDF-SHA256 key derivation (RFC 5869) ---
+//
+// Derive `length` bytes of output keying material from `ikm`, `salt`, and
+// `info` (each base64).  An empty base64 `salt` selects the all-zero salt.
+// Returns the base64 OKM, or "" if `length` exceeds 255*32 or is <= 0.
+pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text {
+  hkdf_sha256_native(salt_b64, ikm_b64, info_b64, length)
+}
+
+// HKDF-Extract (RFC 5869 §2.2): the 32-byte PRK (base64) HMAC-SHA256(salt, ikm).
+// An empty base64 `salt` selects the all-zero salt.  Use the Extract/Expand
+// halves directly (rather than `hkdf_sha256`) when a PRK is reused for several
+// Expands or when an Extract output is itself the value you want (e.g. HPKE).
+pub fn hkdf_extract(salt_b64: text, ikm_b64: text) -> text {
+  hkdf_extract_native(salt_b64, ikm_b64)
+}
+
+// HKDF-Expand (RFC 5869 §2.3) from an existing 32-byte PRK.  Returns `length`
+// bytes of OKM (base64), or "" on a short PRK, length > 255*32, or length <= 0.
+pub fn hkdf_expand(prk_b64: text, info_b64: text, length: integer) -> text {
+  hkdf_expand_native(prk_b64, info_b64, length)
+}
+
+// --- Raw bytes <-> base64 ---
+//
+// loft `text` is UTF-8-validated, so a non-UTF-8 byte string cannot ride as
+// `text` (`text_from_bytes` returns "").  These two inverse helpers move raw
+// bytes across the base64 boundary instead.
+//
+// CAUTION — a `vector<u8>` returned by `base64_to_bytes` is sound to READ
+// (index, iterate, pass by value, or concatenate INTO a fresh loft vector with
+// `fresh += decoded`), but do NOT use it as the left-hand accumulator of `+=`
+// (`decoded += more`): in-place growth of a store-allocated byte vector after a
+// later store allocation currently corrupts it (a loft FFI-vector bug).  To
+// concatenate base64 byte strings, prefer composing in base64 throughout (see
+// how the HPKE code below uses `bytes_concat_b64_native`).
+
+// Standard base64 of a raw byte vector.  Empty vector -> "".
+pub fn bytes_to_base64(bytes: vector<u8>) -> text {
+  bytes_to_base64_native(bytes)
+}
+
+// Raw bytes from standard base64.  Malformed / empty input -> empty vector.
+// See the CAUTION above: read the result, never `+=` onto it.
+pub fn base64_to_bytes(b64: text) -> vector<u8> {
+  base64_to_bytes_native(b64)
+}
+
+// --- AES-256-GCM authenticated encryption ---
+//
+// All byte arguments are base64.  The key is 32 bytes and the nonce is 12
+// bytes (the standard 96-bit GCM IV).  A nonce MUST NOT be reused under one
+// key — derive a fresh one per message (e.g. random_bytes(12)).
+
+// Encrypt + authenticate `plaintext` under `key`/`nonce`, binding `aad`.
+// Returns base64 of ciphertext WITH the 16-byte tag appended, or "" on bad
+// key/nonce length.
+pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text {
+  aes256gcm_seal_native(key_b64, nonce_b64, aad_b64, plaintext_b64)
+}
+
+// Verify + decrypt `ciphertext` (ciphertext||tag, base64) under `key`/`nonce`,
+// binding `aad`.  Returns the base64 plaintext, or "" on ANY authentication
+// failure — an empty result means the ciphertext/tag/aad did not verify.
+pub fn aes256gcm_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text {
+  aes256gcm_open_native(key_b64, nonce_b64, aad_b64, ciphertext_b64)
+}
+
+// --- CSPRNG ---
+
+// Return `length` cryptographically secure random bytes (base64) from the OS
+// RNG.  Returns "" for length <= 0.  Use for keys (32), nonces (12), salts.
+pub fn random_bytes(length: integer) -> text {
+  random_bytes_native(length)
+}
+
+
+// ====================================================================
+// HPKE — Hybrid Public Key Encryption, base mode (RFC 9180)
+// ====================================================================
+//
+// Single-shot Seal/Open for the ciphersuite
+//   DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / AES-256-GCM
+//   kem_id = 0x0020, kdf_id = 0x0001, aead_id = 0x0002, mode = 0x00 (base).
+//
+// This is a PURE-LOFT composition over the native primitives above (X25519,
+// HKDF Extract/Expand, AES-256-GCM), so it runs identically on every backend
+// the primitives reach.  Correctness is gated on an RFC 9180 known-answer test
+// vector (see tests/hpke.loft).
+//
+// Byte composition stays entirely in base64 `text`: every byte chunk (labels,
+// suite ids, keys, DH outputs) is a base64 string, and `bytes_concat_b64`
+// concatenates the underlying raw bytes.  ASCII labels are base64-encoded with
+// the existing `base64_encode` (ASCII is valid UTF-8).  This avoids composing
+// in a store-allocated `vector<u8>`, whose in-place `+=` growth currently
+// corrupts after an intervening store allocation (a loft FFI-vector bug — see
+// the public `bytes_to_base64` / `base64_to_bytes` note below; they are sound
+// for read-only use, just not as a `+=` accumulator).
+
+// base64(bytes(a) || bytes(b)) — concatenate two base64 byte strings.
+fn concat(a_b64: text, b_b64: text) -> text {
+  bytes_concat_b64_native(a_b64, b_b64)
+}
+
+// An ASCII label as a base64 byte string (ASCII is valid UTF-8, so this is the
+// plain text base64 encoder).
+fn label_b64(s: text) -> text {
+  base64_encode_native(s)
+}
+
+// I2OSP(n, 2) as base64: the 2-byte big-endian encoding of `n` (RFC 8017).
+// Only the small fixed set HPKE needs (suite-id fields and the L lengths 32/12)
+// is required here, so each is a precomputed base64 constant — no `vector<u8>`.
+fn i2osp_2_b64(n: integer) -> text {
+  if n == 0x0020 { return "ACA="; }   // 0x00 0x20  (kem_id, and L = 32)
+  if n == 0x0001 { return "AAE="; }   // 0x00 0x01  (kdf_id)
+  if n == 0x0002 { return "AAI="; }   // 0x00 0x02  (aead_id)
+  if n == 12     { return "AAw="; }   // 0x00 0x0c  (L = 12, base nonce)
+  ""
+}
+
+// The main HPKE suite_id (base64): "HPKE" || I2OSP(kem,2) || I2OSP(kdf,2) || I2OSP(aead,2).
+fn hpke_suite_id_b64() -> text {
+  s = concat(label_b64("HPKE"), i2osp_2_b64(0x0020));  // + kem_id
+  s = concat(s, i2osp_2_b64(0x0001));                  // + kdf_id
+  concat(s, i2osp_2_b64(0x0002))                       // + aead_id
+}
+
+// The DHKEM suite_id (base64): "KEM" || I2OSP(kem_id,2).
+fn kem_suite_id_b64() -> text {
+  concat(label_b64("KEM"), i2osp_2_b64(0x0020))
+}
+
+// LabeledExtract(salt, label, ikm) [RFC 9180 §4]:
+//   labeled_ikm = "HPKE-v1" || suite_id || label || ikm
+//   return HKDF-Extract(salt, labeled_ikm)
+// All byte args are base64.  Returns the 32-byte PRK (base64).
+fn labeled_extract(suite_id_b64: text, salt_b64: text, label: text, ikm_b64: text) -> text {
+  li = concat(label_b64("HPKE-v1"), suite_id_b64);
+  li = concat(li, label_b64(label));
+  li = concat(li, ikm_b64);
+  hkdf_extract(salt_b64, li)
+}
+
+// LabeledExpand(prk, label, info, L) [RFC 9180 §4]:
+//   labeled_info = I2OSP(L,2) || "HPKE-v1" || suite_id || label || info
+//   return HKDF-Expand(prk, labeled_info, L)
+// Returns L bytes (base64).
+fn labeled_expand(suite_id_b64: text, prk_b64: text, label: text, info_b64: text, length: integer) -> text {
+  li = concat(i2osp_2_b64(length), label_b64("HPKE-v1"));
+  li = concat(li, suite_id_b64);
+  li = concat(li, label_b64(label));
+  li = concat(li, info_b64);
+  hkdf_expand(prk_b64, li, length)
+}
+
+// DHKEM ExtractAndExpand(dh, kem_context) [RFC 9180 §4.1], KEM suite_id:
+//   eae_prk       = LabeledExtract("", "eae_prk", dh)
+//   shared_secret = LabeledExpand(eae_prk, "shared_secret", kem_context, Nsecret=32)
+// Returns the 32-byte shared secret (base64).
+fn dhkem_extract_and_expand(dh_b64: text, kem_context_b64: text) -> text {
+  ks = kem_suite_id_b64();
+  eae_prk = labeled_extract(ks, "", "eae_prk", dh_b64);
+  labeled_expand(ks, eae_prk, "shared_secret", kem_context_b64, 32)
+}
+
+// The X25519 base point (base64): 0x09 followed by 31 zero bytes (RFC 7748).
+// `x25519_dh(sk, base_point)` yields sk's public key.
+const X25519_BASE_POINT = "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+// The X25519 public key for secret scalar `sk_b64`: X25519(sk, base_point).
+fn x25519_public_key(sk_b64: text) -> text {
+  x25519_dh(sk_b64, X25519_BASE_POINT)
+}
+
+// DHKEM Decap(enc, skR) [RFC 9180 §4.1]:
+//   dh          = DH(skR, enc);  pkRm = pk(skR)
+//   kem_context = enc || pkRm
+//   return ExtractAndExpand(dh, kem_context)
+// Returns the 32-byte shared secret (base64), or "" if enc/skR are invalid.
+fn dhkem_decap(enc_b64: text, sk_r_b64: text) -> text {
+  dh_b64 = x25519_dh(sk_r_b64, enc_b64);
+  if dh_b64 == "" { return ""; }
+  pk_r_b64 = x25519_public_key(sk_r_b64);
+  kem_context = concat(enc_b64, pk_r_b64);
+  dhkem_extract_and_expand(dh_b64, kem_context)
+}
+
+// DHKEM Encap(pkR, skE) — the deterministic variant [RFC 9180 §4.1].  Takes a
+// fixed ephemeral secret `sk_e_b64` (the KAT path); `hpke_seal_base` generates
+// a random one.
+//   pkEm = pk(skE);  dh = DH(skE, pkR);  enc = pkEm
+//   kem_context = enc || pkR
+//   return (ExtractAndExpand(dh, kem_context), enc)
+// Returns (shared_secret_b64, enc_b64); ("","") on invalid input.
+fn dhkem_encap_deterministic(pk_r_b64: text, sk_e_b64: text) -> (text, text) {
+  enc_b64 = x25519_public_key(sk_e_b64);
+  if enc_b64 == "" { return ("", ""); }
+  dh_b64 = x25519_dh(sk_e_b64, pk_r_b64);
+  if dh_b64 == "" { return ("", ""); }
+  kem_context = concat(enc_b64, pk_r_b64);
+  shared_secret = dhkem_extract_and_expand(dh_b64, kem_context);
+  (shared_secret, enc_b64)
+}
+
+// KeySchedule for base mode (RFC 9180 §5.1), MAIN suite_id.  Returns the AEAD
+// key (32 bytes) and base nonce (12 bytes) as (key_b64, nonce_b64).
+//   psk_id_hash          = LabeledExtract("", "psk_id_hash", "")
+//   info_hash            = LabeledExtract("", "info_hash", info)
+//   key_schedule_context = 0x00 || psk_id_hash || info_hash
+//   secret               = LabeledExtract(shared_secret, "secret", "")
+//   key        = LabeledExpand(secret, "key", key_schedule_context, Nk=32)
+//   base_nonce = LabeledExpand(secret, "base_nonce", key_schedule_context, Nn=12)
+fn key_schedule_base(shared_secret_b64: text, info_b64: text) -> (text, text) {
+  s = hpke_suite_id_b64();
+
+  psk_id_hash = labeled_extract(s, "", "psk_id_hash", "");
+  info_hash = labeled_extract(s, "", "info_hash", info_b64);
+
+  // key_schedule_context = mode (0x00) || psk_id_hash || info_hash.
+  // The single 0x00 mode byte as base64 is "AA==".
+  ks_context = concat("AA==", psk_id_hash);
+  ks_context = concat(ks_context, info_hash);
+
+  // secret = LabeledExtract(shared_secret, "secret", "")  — shared_secret is the salt.
+  secret = labeled_extract(s, shared_secret_b64, "secret", "");
+
+  key = labeled_expand(s, secret, "key", ks_context, 32);
+  base_nonce = labeled_expand(s, secret, "base_nonce", ks_context, 12);
+  (key, base_nonce)
+}
+
+// The result of `hpke_seal_base`: the KEM-encapsulated key `enc` and the AEAD
+// `ciphertext` (ciphertext||16-byte-tag), both base64.
+pub struct HpkeSealed {
+  enc: text not null,
+  ciphertext: text not null,
+}
+
+// Internal: seal with an already-encapsulated (shared_secret, enc).  seq = 0,
+// so the AEAD nonce is exactly base_nonce (RFC 9180 §5.2).
+fn seal_with_context(shared_secret_b64: text, enc_b64: text, info_b64: text, aad_b64: text, pt_b64: text) -> HpkeSealed {
+  (key, base_nonce) = key_schedule_base(shared_secret_b64, info_b64);
+  if key == "" || base_nonce == "" { return HpkeSealed { enc: "", ciphertext: "" }; }
+  ct = aes256gcm_seal(key, base_nonce, aad_b64, pt_b64);
+  HpkeSealed { enc: enc_b64, ciphertext: ct }
+}
+
+// --- Public HPKE API ---
+
+// HPKE SealBase (RFC 9180 §6.1): encrypt `pt` to recipient public key `pk_r`,
+// binding `info` (key-schedule context) and `aad` (per-message AAD).  Generates
+// a fresh ephemeral key, so each call's output differs.  All args/fields base64.
+// Returns HpkeSealed { enc, ciphertext }; both "" on failure.
+pub fn hpke_seal_base(pk_r_b64: text, info_b64: text, aad_b64: text, pt_b64: text) -> HpkeSealed {
+  sk_e_b64 = random_bytes(32);
+  (shared_secret, enc) = dhkem_encap_deterministic(pk_r_b64, sk_e_b64);
+  if shared_secret == "" { return HpkeSealed { enc: "", ciphertext: "" }; }
+  seal_with_context(shared_secret, enc, info_b64, aad_b64, pt_b64)
+}
+
+// Deterministic SealBase — TEST ONLY.  Uses the caller-supplied ephemeral
+// secret `sk_e_b64` instead of a random one, so the output is reproducible
+// against an RFC 9180 known-answer vector.  Never use in production.
+pub fn hpke_seal_base_deterministic(pk_r_b64: text, sk_e_b64: text, info_b64: text, aad_b64: text, pt_b64: text) -> HpkeSealed {
+  (shared_secret, enc) = dhkem_encap_deterministic(pk_r_b64, sk_e_b64);
+  if shared_secret == "" { return HpkeSealed { enc: "", ciphertext: "" }; }
+  seal_with_context(shared_secret, enc, info_b64, aad_b64, pt_b64)
+}
+
+// HPKE OpenBase (RFC 9180 §6.1): decrypt `ct` for recipient secret key `sk_r`
+// using the sender's `enc`, binding `info` and `aad`.  All args base64.  Returns
+// the base64 plaintext, or "" on ANY failure (bad enc/key or AEAD auth failure).
+pub fn hpke_open_base(sk_r_b64: text, enc_b64: text, info_b64: text, aad_b64: text, ct_b64: text) -> text {
+  shared_secret = dhkem_decap(enc_b64, sk_r_b64);
+  if shared_secret == "" { return ""; }
+  (key, base_nonce) = key_schedule_base(shared_secret, info_b64);
+  if key == "" || base_nonce == "" { return ""; }
+  aes256gcm_open(key, base_nonce, aad_b64, ct_b64)
+}
+
+// Expose the key-schedule outputs for KAT assertions — TEST ONLY.  Given a
+// shared secret and base64 `info`, returns (key_b64, base_nonce_b64).
+pub fn hpke_key_schedule_base_for_test(shared_secret_b64: text, info_b64: text) -> (text, text) {
+  key_schedule_base(shared_secret_b64, info_b64)
+}
+
+// Expose deterministic Encap for KAT assertions — TEST ONLY.  Returns
+// (shared_secret_b64, enc_b64).
+pub fn hpke_encap_deterministic_for_test(pk_r_b64: text, sk_e_b64: text) -> (text, text) {
+  dhkem_encap_deterministic(pk_r_b64, sk_e_b64)
 }

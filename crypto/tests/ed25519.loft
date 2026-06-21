@@ -1,0 +1,108 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Ed25519 (RFC 8032) known-answer tests.  The vectors are the official
+// RFC 8032 §7.1 TEST 1 (empty message) and TEST 2 (1-byte message 0x72),
+// base64-encoded.  A KAT only validates if the expected values are the real
+// RFC ones, so the hex was taken verbatim from RFC 8032 and base64-encoded:
+//
+//   TEST 1  sk = 9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60
+//           pk = d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+//           msg = (empty)
+//           sig = e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155
+//                 5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b
+//
+//   TEST 2  sk = 4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb
+//           pk = 3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c
+//           msg = 72
+//           sig = 92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da
+//                 085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00
+
+use crypto;
+
+// ── RFC 8032 TEST 1 (empty message) ──────────────────────────────────
+
+fn test_ed25519_rfc8032_test1_public_key() {
+  sk = "nWGxne/9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A=";
+  pk = crypto::ed25519_public_key(sk);
+  assert(pk == "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+         "ed25519 RFC8032 test1 public key: {pk}");
+}
+
+fn test_ed25519_rfc8032_test1_sign() {
+  sk = "nWGxne/9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A=";
+  msg = ""; // empty message
+  sig = crypto::ed25519_sign(sk, msg);
+  assert(sig == "5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw==",
+         "ed25519 RFC8032 test1 signature: {sig}");
+}
+
+fn test_ed25519_rfc8032_test1_verify() {
+  pk = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
+  msg = "";
+  sig = "5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw==";
+  ok = crypto::ed25519_verify(pk, msg, sig);
+  assert(ok, "ed25519 RFC8032 test1 verify must accept the valid signature");
+}
+
+// ── RFC 8032 TEST 2 (1-byte message) ─────────────────────────────────
+
+fn test_ed25519_rfc8032_test2_public_key() {
+  sk = "TM0Imyj/ltqdtsNG7BFOD1uKMZ81q6Yk2oz27U+4pvs=";
+  pk = crypto::ed25519_public_key(sk);
+  assert(pk == "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=",
+         "ed25519 RFC8032 test2 public key: {pk}");
+}
+
+fn test_ed25519_rfc8032_test2_sign() {
+  sk = "TM0Imyj/ltqdtsNG7BFOD1uKMZ81q6Yk2oz27U+4pvs=";
+  msg = "cg=="; // 0x72
+  sig = crypto::ed25519_sign(sk, msg);
+  assert(sig == "kqAJqfDUyrhyDoILX2QlQKKye1QWUD+Ps3YiI+vbadoIWsHkPhWZbkWPNhPQ8R2MOHsurrQwKu6wDSkWErsMAA==",
+         "ed25519 RFC8032 test2 signature: {sig}");
+}
+
+fn test_ed25519_rfc8032_test2_verify() {
+  pk = "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=";
+  msg = "cg==";
+  sig = "kqAJqfDUyrhyDoILX2QlQKKye1QWUD+Ps3YiI+vbadoIWsHkPhWZbkWPNhPQ8R2MOHsurrQwKu6wDSkWErsMAA==";
+  ok = crypto::ed25519_verify(pk, msg, sig);
+  assert(ok, "ed25519 RFC8032 test2 verify must accept the valid signature");
+}
+
+// ── Tamper rejection: a flipped signature byte must fail ──────────────
+
+fn test_ed25519_verify_rejects_tampered_signature() {
+  pk = "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=";
+  msg = "cg==";
+  // Test 2 signature with the final byte 0x00 flipped to 0x01.
+  tampered = "kqAJqfDUyrhyDoILX2QlQKKye1QWUD+Ps3YiI+vbadoIWsHkPhWZbkWPNhPQ8R2MOHsurrQwKu6wDSkWErsMAQ==";
+  ok = crypto::ed25519_verify(pk, msg, tampered);
+  assert(!ok, "ed25519 verify must reject a tampered signature");
+}
+
+// ── Wrong-message rejection ───────────────────────────────────────────
+
+fn test_ed25519_verify_rejects_wrong_message() {
+  pk = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
+  // Test 1's signature is over the EMPTY message; verifying it over a
+  // non-empty message must fail.
+  wrong_msg = "cg==";
+  sig = "5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw==";
+  ok = crypto::ed25519_verify(pk, wrong_msg, sig);
+  assert(!ok, "ed25519 verify must reject a signature over a different message");
+}
+
+// ── Malformed input is loft-safe (no panic) ───────────────────────────
+
+fn test_ed25519_malformed_input_is_safe() {
+  // Wrong-length secret → empty string, not a halt.
+  empty_pk = crypto::ed25519_public_key("dG9vc2hvcnQ="); // "tooshort", 8 bytes
+  assert(empty_pk == "", "ed25519_public_key on a short seed returns empty");
+
+  empty_sig = crypto::ed25519_sign("dG9vc2hvcnQ=", "cg==");
+  assert(empty_sig == "", "ed25519_sign on a short seed returns empty");
+
+  bad = crypto::ed25519_verify("dG9vc2hvcnQ=", "cg==", "dG9vc2hvcnQ=");
+  assert(!bad, "ed25519_verify on malformed key/sig returns false");
+}
