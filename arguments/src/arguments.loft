@@ -68,19 +68,18 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
   self.err = "";
   p_pending = -1;
   p_past = false;
-  // Capture options + results into locals so skip-pattern 5
-  // (`if idx < len(vec) { vec[idx] }`) can prove bounds on each
-  // indexed access — the pattern only matches when the vec is a bare
-  // local Var, not a struct field deref.  The locals alias the same
-  // backing vectors as self.options/self.results, so indexed writes
-  // propagate; appends still go through `self.positionals` to keep
-  // the alias valid.
+  // `options` is a read-only local copy of the immutable option list
+  // (kind/length lookups only).  Result VALUES are written through
+  // `self.results[i]` directly: a struct vector-field read COPIES (loft
+  // value semantics, @PLN85 #415), so a captured `results = self.results`
+  // local would be a copy and index-writes to it would never reach the
+  // field — every write below, and the mandatory-check read, target
+  // `self.results`.  Each access is guarded by `i < len(self.results)`.
   options = self.options;
-  results = self.results;
   for pa in argv {
     if p_pending >= 0 {
-      if p_pending < len(results) {
-        results[p_pending] = pa;
+      if p_pending < len(self.results) {
+        self.results[p_pending] = pa;
       }
       p_pending = -1;
     } else if p_past {
@@ -98,8 +97,8 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
         }
         if p_idx < len(options) {
           if options[p_idx].kind == ArgKind.Flag {
-            if p_idx < len(results) {
-              results[p_idx] = "true";
+            if p_idx < len(self.results) {
+              self.results[p_idx] = "true";
             }
           } else {
             p_pending = p_idx;
@@ -113,15 +112,15 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
           self.err = "Unknown option: --{p_name}";
           return false
         }
-        if p_idx < len(results) {
-          results[p_idx] = p_val;
+        if p_idx < len(self.results) {
+          self.results[p_idx] = p_val;
         }
       }
     } else if len(pa) > 1 && pa.starts_with("-") {
       for pc in pa[1..] {
         if p_pending >= 0 {
-          if p_pending < len(results) {
-            results[p_pending] = pa[pc#index + 1..];
+          if p_pending < len(self.results) {
+            self.results[p_pending] = pa[pc#index + 1..];
           }
           p_pending = -1;
           break
@@ -133,8 +132,8 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
         }
         if p_si < len(options) {
           if options[p_si].kind == ArgKind.Flag {
-            if p_si < len(results) {
-              results[p_si] = "true";
+            if p_si < len(self.results) {
+              self.results[p_si] = "true";
             }
           } else {
             p_pending = p_si;
@@ -158,8 +157,8 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
       // above); the explicit `< len(results)` check makes the
       // in-bounds proof visible to the parser.
       mi = pm#index;
-      if mi < len(results) {
-        val = results[mi];
+      if mi < len(self.results) {
+        val = self.results[mi];
         if val == null {
           self.err = "Required option --{pm.long_name} is missing";
           return false
