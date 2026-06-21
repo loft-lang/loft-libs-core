@@ -5,9 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # crypto — cryptographic primitives for loft
 
-SHA-256, HMAC-SHA-256, and base64 / base64url encoding +
-decoding.  Zero runtime dependencies; pure-Rust implementations
-exported through the loft FFI.
+SHA-256, HMAC-SHA-256, base64 / base64url encoding + decoding, and
+Ed25519 (RFC 8032) signatures.  Pure-Rust implementations exported
+through the loft FFI: the hashing / base64 primitives are
+dependency-free; Ed25519 wraps the vetted `ed25519-dalek` crate (no
+openssl / ring, so the cdylib cross-compiles without a C toolchain).
 
 ## Install
 
@@ -40,6 +42,13 @@ fn main() {
 | `base64_encode(input: text) -> text` | RFC 4648 standard alphabet | |
 | `base64_decode(input: text) -> text` | Inverse of `base64_encode` | Returns empty on invalid input |
 | `base64url_encode(input: text) -> text` | RFC 4648 URL-safe alphabet, no padding | |
+| `ed25519_public_key(secret_key_b64: text) -> text` | 32-byte public key, base64 | `""` if the seed is not 32 bytes |
+| `ed25519_sign(secret_key_b64: text, message_b64: text) -> text` | 64-byte signature, base64 | secret key = RFC 8032 32-byte seed; `""` on bad seed |
+| `ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean` | `true` iff valid | `false` on any malformed input |
+
+Ed25519 keeps all bytes as standard base64 `text`.  A secret key is the
+RFC 8032 32-byte seed; messages are the raw bytes to sign, base64-encoded.
+Verified against the RFC 8032 §7.1 known-answer vectors (`tests/ed25519.loft`).
 
 ## Building from source
 

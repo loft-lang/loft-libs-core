@@ -1,0 +1,103 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// HPKE base-mode known-answer tests (RFC 9180).
+//
+// Vector source: the official CFRG test-vectors.json
+//   (https://github.com/cfrg/draft-irtf-cfrg-hpke, the file RFC 9180 was
+//   published from), the single entry with
+//     mode = 0 (base), kem_id = 32 (DHKEM(X25519, HKDF-SHA256)),
+//     kdf_id = 1 (HKDF-SHA256), aead_id = 2 (AES-256-GCM).
+//   (RFC 9180 Appendix A.1's printed vector is the same KEM/KDF but AES-128-GCM;
+//   the AES-256-GCM X25519 vector lives only in test-vectors.json.)
+//
+// Every field below is that vector's value, base64-encoded.  The first
+// encryption in the vector is sequence 0, so the AEAD nonce is exactly the
+// base nonce.
+//
+//   info   = 4f6465206f6e2061204772656369616e2055726e
+//   skEm   = 179d4b53b6365c45b600c4163b61d95cbc2f4d9e36f1695558dce265ab8bab11
+//   skRm   = 497b4502664cfea5d5af0b39934dac72242a74f8480451e1aee7d6a53320333d
+//   pkRm   = 430f4b9859665145a6b1ba274024487bd66f03a2dd577d7753c68d7d7d00c00c
+//   enc    = 6c93e09869df3402d7bf231bf540fadd35cd56be14f97178f0954db94b7fc256
+//   shared = 3101c54c3a4f87439eaac080699ed9bbcc726ffe44e860c0424ccb7e3e2ead7b
+//   key    = f50b0609186798729ed0564b36ef2ef8044f1f9d05636874d1f46c819c7a669f
+//   nonce  = 151d9929e2449747889bc923
+//   aad    = 436f756e742d30
+//   pt     = 4265617574792069732074727574682c20747275746820626561757479
+//   ct     = e5d84cd531cfb583096e7cfa9641bd3079cf3a91cda813c52deb5f512be9931980a41de125a925cdad859d5b7a
+
+use crypto;
+
+const SK_E   = "F51LU7Y2XEW2AMQWO2HZXLwvTZ428WlVWNziZauLqxE=";
+const SK_R   = "SXtFAmZM/qXVrws5k02sciQqdPhIBFHhrufWpTMgMz0=";
+const PK_R   = "Qw9LmFlmUUWmsbonQCRIe9ZvA6LdV313U8aNfX0AwAw=";
+const ENC    = "bJPgmGnfNALXvyMb9UD63TXNVr4U+XF48JVNuUt/wlY=";
+const SHARED = "MQHFTDpPh0OeqsCAaZ7Zu8xyb/5E6GDAQkzLfj4urXs=";
+const KEY    = "9QsGCRhnmHKe0FZLNu8u+ARPH50FY2h00fRsgZx6Zp8=";
+const NONCE  = "FR2ZKeJEl0eIm8kj";
+const INFO   = "T2RlIG9uIGEgR3JlY2lhbiBVcm4=";
+const AAD    = "Q291bnQtMA==";
+const PT     = "QmVhdXR5IGlzIHRydXRoLCB0cnV0aCBiZWF1dHk=";
+const CT     = "5dhM1THPtYMJbnz6lkG9MHnPOpHNqBPFLetfUSvpkxmApB3hJaklza2FnVt6";
+
+// Deterministic Encap(pkR, skEm) must yield the vector's enc AND shared_secret.
+fn test_hpke_encap_matches_vector() {
+  (shared, enc) = crypto::hpke_encap_deterministic_for_test(PK_R, SK_E);
+  assert(enc == ENC, "HPKE Encap enc must match vector: got {enc}");
+  assert(shared == SHARED, "HPKE Encap shared_secret must match vector: got {shared}");
+}
+
+// KeySchedule(shared_secret, info) must yield the vector's key and base_nonce.
+fn test_hpke_key_schedule_matches_vector() {
+  (key, nonce) = crypto::hpke_key_schedule_base_for_test(SHARED, INFO);
+  assert(key == KEY, "HPKE key must match vector: got {key}");
+  assert(nonce == NONCE, "HPKE base_nonce must match vector: got {nonce}");
+}
+
+// SealBase (deterministic) must produce the vector's enc and ciphertext.
+fn test_hpke_seal_base_matches_vector() {
+  sealed = crypto::hpke_seal_base_deterministic(PK_R, SK_E, INFO, AAD, PT);
+  assert(sealed.enc == ENC, "HPKE seal enc must match vector: got {sealed.enc}");
+  assert(sealed.ciphertext == CT, "HPKE seal ciphertext must match vector: got {sealed.ciphertext}");
+}
+
+// OpenBase must recover the vector's plaintext from enc + ciphertext.
+fn test_hpke_open_base_recovers_plaintext() {
+  pt = crypto::hpke_open_base(SK_R, ENC, INFO, AAD, CT);
+  assert(pt == PT, "HPKE open must recover the vector plaintext: got {pt}");
+}
+
+// A tampered ciphertext must fail authentication and open to "".
+fn test_hpke_open_base_rejects_tampered_ciphertext() {
+  // The vector ct with its final tag byte flipped (last base64 char changed).
+  tampered = "5dhM1THPtYMJbnz6lkG9MHnPOpHNqBPFLetfUSvpkxmApB3hJaklza2FnVt5";
+  out = crypto::hpke_open_base(SK_R, ENC, INFO, AAD, tampered);
+  assert(out == "", "HPKE open must reject a tampered ciphertext (empty result): got {out}");
+}
+
+// Wrong AAD must fail authentication and open to "".
+fn test_hpke_open_base_rejects_wrong_aad() {
+  out = crypto::hpke_open_base(SK_R, ENC, INFO, "d3JvbmctYWFk", CT);
+  assert(out == "", "HPKE open must reject a changed AAD (empty result): got {out}");
+}
+
+// Randomised seal -> open round trip: a fresh ephemeral key each call, recovered
+// by the matching recipient secret.  Exercises the non-deterministic path.
+fn test_hpke_seal_open_round_trip() {
+  sealed = crypto::hpke_seal_base(PK_R, INFO, AAD, PT);
+  assert(sealed.enc != "", "randomised HPKE seal must produce an enc");
+  assert(sealed.ciphertext != "", "randomised HPKE seal must produce a ciphertext");
+  // A fresh ephemeral key means a different enc/ct than the deterministic KAT.
+  assert(sealed.enc != ENC, "randomised seal enc should differ from the fixed-skE vector");
+  recovered = crypto::hpke_open_base(SK_R, sealed.enc, INFO, AAD, sealed.ciphertext);
+  assert(recovered == PT, "randomised HPKE round trip must recover the plaintext: got {recovered}");
+}
+
+// A non-recipient secret key must NOT recover the plaintext.
+fn test_hpke_open_base_wrong_recipient_fails() {
+  // skEm is a valid X25519 scalar but not the recipient — decap yields a
+  // different shared secret, so the AEAD tag fails.
+  out = crypto::hpke_open_base(SK_E, ENC, INFO, AAD, CT);
+  assert(out == "", "HPKE open with the wrong recipient key must fail: got {out}");
+}
