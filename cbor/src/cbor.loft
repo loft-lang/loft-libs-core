@@ -1,0 +1,259 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- CBOR ---
+// Canonical CBOR (RFC 8949) for loft, in pure loft.
+//
+// CBOR is a compact, binary, self-describing serialisation — like JSON but
+// with native byte strings and a *deterministic* (canonical) form.  This
+// library targets the signable-record use case: the same value always encodes
+// to byte-identical output, so a signature over those bytes is stable across
+// implementations and across targets.
+//
+// Pure loft by design (loft-lang/plans#83): the byte format is simple enough to
+// assemble directly over `vector<u8>`, so there is no native crate, no FFI
+// bridge, and no external-crate trust surface — and the codec runs identically
+// native and in the browser (native == wasm) by construction.
+//
+// Build a `CborValue` and `encode` it; the canonical encoder picks shortest-form
+// integer/length heads.  (Map-key canonical ordering, decode, and the typed
+// `T.to_cbor()` path land in later phases — see the plan.)
+
+/// A dynamic CBOR value.  Mirrors the stdlib `JsonValue`, with CBOR's extra
+/// `CBytes` (native byte string) and the integer split that CBOR makes at the
+/// wire level folded into one signed `CInt`.
+pub enum CborValue {
+  CNull,
+  CBool  { value: boolean },
+  CInt   { value: integer not null },   // >=0 -> major 0 (uint); <0 -> major 1 (negint)
+  CBytes { value: vector<u8> },
+  CText  { value: text },
+  CArray { items: vector<CborValue> },
+  CMap   { entries: vector<CborEntry> },
+}
+
+/// One key/value pair of a `CMap`.
+pub struct CborEntry {
+  key: CborValue,
+  value: CborValue,
+}
+
+// Canonical head: the major type (0..7) plus the SHORTEST-form encoding of
+// `arg` (RFC 8949 §4.2.1).  Lengths and integer payloads share this routine.
+fn head(major: integer, arg: integer) -> vector<u8> {
+  buf: vector<u8> = [];
+  if arg < 24 {
+    buf += [(major * 32 + arg) as u8];
+  } else if arg < 256 {
+    buf += [(major * 32 + 24) as u8];
+    buf += [arg as u8];
+  } else if arg < 65536 {
+    buf += [(major * 32 + 25) as u8];
+    buf += [(arg / 256) as u8];
+    buf += [(arg % 256) as u8];
+  } else if arg < 4294967296 {
+    buf += [(major * 32 + 26) as u8];
+    buf += [(arg / 16777216 % 256) as u8];
+    buf += [(arg / 65536 % 256) as u8];
+    buf += [(arg / 256 % 256) as u8];
+    buf += [(arg % 256) as u8];
+  } else {
+    buf += [(major * 32 + 27) as u8];
+    buf += [(arg / 72057594037927936 % 256) as u8];
+    buf += [(arg / 281474976710656 % 256) as u8];
+    buf += [(arg / 1099511627776 % 256) as u8];
+    buf += [(arg / 4294967296 % 256) as u8];
+    buf += [(arg / 16777216 % 256) as u8];
+    buf += [(arg / 65536 % 256) as u8];
+    buf += [(arg / 256 % 256) as u8];
+    buf += [(arg % 256) as u8];
+  }
+  return buf;
+}
+
+// Bytewise lexicographic less-than over two byte strings (RFC 8949 §4.2.1
+// canonical map-key order): at the first differing byte the smaller byte wins;
+// a proper prefix sorts before the longer string.
+fn byte_lt(a: vector<u8>, b: vector<u8>) -> boolean {
+  na = len(a);
+  nb = len(b);
+  m = if na < nb { na } else { nb };
+  for i in 0..m {
+    if a[i] != b[i] { return a[i] < b[i]; }
+  }
+  return na < nb;
+}
+
+// Encode a map with its entries in canonical key order: keys compared by their
+// deterministic encodings, bytewise (RFC 8949 §4.2.1).  Emits each entry at the
+// position equal to its key's RANK (how many keys sort before it) — a formulation
+// that uses only append + read (no marker array, no vector element assignment,
+// no nested vectors), so it codegens identically on the interpreter and --native.
+// O(n^3), which is fine: a signable record's maps are small.
+fn encode_map(entries: vector<CborEntry>) -> vector<u8> {
+  n = len(entries);
+  buf = head(5, n);
+  for target in 0..n {
+    for i in 0..n {
+      ki = encode(entries[i].key);
+      rank = 0;
+      for j in 0..n {
+        if j != i {
+          if byte_lt(encode(entries[j].key), ki) { rank = rank + 1; }
+        }
+      }
+      if rank == target {
+        buf += ki;
+        buf += encode(entries[i].value);
+      }
+    }
+  }
+  return buf;
+}
+
+/// Encode a `CborValue` to canonical CBOR bytes.
+pub fn encode(v: CborValue) -> vector<u8> {
+  match v {
+    CNull => head(7, 22),                                   // 0xf6
+    CBool { value } => head(7, if value { 21 } else { 20 }), // 0xf5 / 0xf4
+    CInt { value } => if value >= 0 { head(0, value) } else { head(1, 0 - value - 1) },
+    CBytes { value } => {
+      buf = head(2, len(value));
+      buf += value;
+      buf
+    },
+    CText { value } => {
+      n = len(value);
+      buf = head(3, n);
+      for i in 0..n { buf += [value.byte_at(i) as u8]; }
+      buf
+    },
+    CArray { items } => {
+      buf = head(4, len(items));
+      for i in 0..len(items) { buf += encode(items[i]); }
+      buf
+    },
+    CMap { entries } => encode_map(entries),
+  }
+}
+
+// --- decode (A3) ---
+
+/// The result of decoding one CBOR value: the `value`, the byte position just
+/// past it (`next`), and `ok` — false on any malformed / non-canonical /
+/// truncated input.  Decoding never crashes (loft-safe): a bad byte stream
+/// yields ok=false rather than a trap.
+pub struct Decoded {
+  value: CborValue,
+  next:  integer,
+  ok:    boolean,
+}
+
+// Decode one CBOR value starting at `pos`.  Recursive: arrays/maps thread the
+// running position through their children.  Enforces canonical shortest-form
+// heads (an overlong argument is rejected) and definite lengths only.
+fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
+  n = len(bytes);
+  if pos >= n { return Decoded { value: CNull, next: pos, ok: false }; }
+  b = bytes[pos];
+  major = b / 32;
+  info = b % 32;
+  // --- argument (length / integer payload), canonical shortest-form ---
+  arg = 0;
+  argpos = pos + 1;
+  argok = true;
+  if info < 24 {
+    arg = info;
+  } else if info == 24 {
+    if argpos >= n { argok = false; }
+    else { arg = bytes[argpos]; argpos = argpos + 1; if arg < 24 { argok = false; } }
+  } else if info == 25 {
+    if argpos + 1 >= n { argok = false; }
+    else { arg = bytes[argpos] * 256 + bytes[argpos + 1]; argpos = argpos + 2; if arg < 256 { argok = false; } }
+  } else if info == 26 {
+    if argpos + 3 >= n { argok = false; }
+    else {
+      arg = ((bytes[argpos] * 256 + bytes[argpos + 1]) * 256 + bytes[argpos + 2]) * 256 + bytes[argpos + 3];
+      argpos = argpos + 4;
+      if arg < 65536 { argok = false; }
+    }
+  } else if info == 27 {
+    if argpos + 7 >= n { argok = false; }
+    else if bytes[argpos] >= 128 { argok = false; }   // exceeds i64 range
+    else {
+      arg = bytes[argpos];
+      for k in 1..8 { arg = arg * 256 + bytes[argpos + k]; }
+      argpos = argpos + 8;
+      if arg < 4294967296 { argok = false; }
+    }
+  } else {
+    argok = false;   // 28/29/30 reserved, 31 indefinite — not canonical
+  }
+  if !argok { return Decoded { value: CNull, next: pos, ok: false }; }
+  // --- dispatch on major type ---
+  if major == 0 { return Decoded { value: CInt { value: arg }, next: argpos, ok: true }; }
+  if major == 1 { return Decoded { value: CInt { value: 0 - arg - 1 }, next: argpos, ok: true }; }
+  if major == 2 {
+    if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
+    bs: vector<u8> = [];
+    for k in 0..arg { bs += [bytes[argpos + k]]; }
+    return Decoded { value: CBytes { value: bs }, next: argpos + arg, ok: true };
+  }
+  if major == 3 {
+    if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
+    tb: vector<u8> = [];
+    for k in 0..arg { tb += [bytes[argpos + k]]; }
+    return Decoded { value: CText { value: text_from_bytes(tb) }, next: argpos + arg, ok: true };
+  }
+  if major == 4 {
+    items: vector<CborValue> = [];
+    p = argpos;
+    aok = true;
+    for k in 0..arg {
+      if aok {
+        sub = read_value(bytes, p);
+        if sub.ok { items += [sub.value]; p = sub.next; } else { aok = false; }
+      }
+    }
+    if !aok { return Decoded { value: CNull, next: pos, ok: false }; }
+    return Decoded { value: CArray { items: items }, next: p, ok: true };
+  }
+  if major == 5 {
+    entries: vector<CborEntry> = [];
+    p = argpos;
+    mok = true;
+    for k in 0..arg {
+      if mok {
+        kd = read_value(bytes, p);
+        if kd.ok {
+          vd = read_value(bytes, kd.next);
+          if vd.ok {
+            kv = kd.value;
+            vv = vd.value;
+            entries += [CborEntry { key: kv, value: vv }];
+            p = vd.next;
+          } else { mok = false; }
+        } else { mok = false; }
+      }
+    }
+    if !mok { return Decoded { value: CNull, next: pos, ok: false }; }
+    return Decoded { value: CMap { entries: entries }, next: p, ok: true };
+  }
+  if major == 7 {
+    if info == 20 { return Decoded { value: CBool { value: false }, next: argpos, ok: true }; }
+    if info == 21 { return Decoded { value: CBool { value: true },  next: argpos, ok: true }; }
+    if info == 22 { return Decoded { value: CNull, next: argpos, ok: true }; }
+  }
+  // major 6 (tags), float / undefined simples — unsupported in the signable subset
+  return Decoded { value: CNull, next: pos, ok: false };
+}
+
+/// Decode canonical CBOR bytes into a `CborValue`.  Returns `ok=false` on any
+/// malformed, non-canonical, or truncated input — and rejects trailing bytes
+/// after the top-level value.  Never crashes.
+pub fn decode(bytes: vector<u8>) -> Decoded {
+  d = read_value(bytes, 0);
+  if d.ok {
+    if d.next != len(bytes) { return Decoded { value: CNull, next: d.next, ok: false }; }
+  }
+  return d;
+}
