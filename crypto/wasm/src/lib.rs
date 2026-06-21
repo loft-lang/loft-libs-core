@@ -7,41 +7,48 @@
 //! `[wasm.bridge].routes` table (`loft.toml`) to the matching `pub fn` here; the
 //! generated standalone Rust binary links this crate as `--extern crypto_wasm=…`
 //! and calls the bridge directly (no cdylib `dlopen`, no `State` indirection at
-//! runtime, so neither the native cdylib ABI nor the interpreter `replace_native`
-//! mechanism applies).  A text-returning `#native` already has a `-> String`
-//! wrapper, so a `text -> text` bridge returns the `String` directly with no store
-//! reshaping (the loft #407 convention); a `boolean` return is emitted `as u8`.
+//! runtime).  A text-returning `#native` already has a `-> String` wrapper, so a
+//! `text -> text` bridge returns the `String` directly with no store reshaping
+//! (the loft #407 convention); a `boolean` return is emitted `as u8`.
 //!
-//! Two sourcing strategies, chosen by the primitive's dependencies:
+//! Every primitive is **SHARED** byte-identical with native via `#[path]` — the
+//! bridge imports the SAME source modules the native cdylib uses, so `native ==
+//! wasm` holds BY CONSTRUCTION (one home, no second implementation to drift):
 //!
-//! * **shared** (hashing + base64) — the native crate's SHA-256/HMAC and base64
-//!   live in ZERO-DEPENDENCY modules, so the bridge includes the SAME source via
-//!   `#[path]`.  The `--html` bridge build threads only `--extern loft=…`, so a
-//!   dependency-free module compiles unchanged here, and *sharing* (not
-//!   re-transcribing) keeps native and wasm byte-identical BY CONSTRUCTION — the
-//!   one-home rule, no second implementation to drift.
-//! * **re-implemented** (HKDF) — HKDF's native module sits on the RustCrypto `hkdf`
-//!   crate, which the `--extern loft`-only bridge build cannot resolve.  HKDF is a
-//!   thin, fully-specified (RFC 5869) construction over the shared `hmac_sha256`,
-//!   so it is re-expressed here and pinned to the RFC 5869 Appendix-A vectors on
-//!   BOTH backends: two correct RFC-5869 implementations agree on every input, so
-//!   the KAT proves `native == wasm`.
+//! * **Zero-dep modules** (`sha256.rs`, `base64.rs`) compile under the
+//!   `--extern loft`-only bridge build directly.
+//! * **dalek / RustCrypto modules** (`ed25519.rs`, `x25519.rs`, `aes256gcm.rs`)
+//!   need the vetted crates (Cargo.toml).  `loft --html` provides them to rustc
+//!   via a `-L dependency=…` search path built from this crate's manifest (the
+//!   build-extension in `src/main.rs`).  Their deterministic ops — sign / verify /
+//!   diffie_hellman / seal / open — need NO RNG, so the crates compile to
+//!   wasm32-unknown-unknown without getrandom or wasm-bindgen.
 //!
-//! The curve / AEAD / CSPRNG primitives (ed25519, x25519, aes256gcm, random_bytes)
-//! sit on dalek / RustCrypto / OsRng and must NOT be hand-rolled.  They are
-//! intentionally ABSENT from the routes table until the build-extension path
-//! (compile this crate's vetted deps to wasm) lands (@PLN84 ZT-B): an unrouted
-//! `#native` on wasm is a clean compile/link error, never a wrong answer.
+//! HKDF is the one re-implementation: its native module sits on the RustCrypto
+//! `hkdf` crate; here it is a pure-Rust RFC-5869 expansion over the shared
+//! `hmac_sha256`, pinned to the RFC 5869 Appendix-A vectors on both backends.
+//!
+//! Still NOT routed: `random_bytes` — it needs OS entropy, which on wasm means a
+//! synchronous `getRandomValues` host import (host.js), the one non-pure-compute
+//! bridge; that lands next.
 
 #![allow(dead_code)] // exposed for codegen-emitted call sites
 
 use loft::database::Stores;
 
-// Shared with native — same source, zero external deps => byte-identical output.
+// Shared with native — same source => byte-identical output.  The first two are
+// dependency-free; the last three pull the dalek/RustCrypto crates (Cargo.toml),
+// which `loft --html` compiles to wasm32 and threads in via `-L dependency`.
 #[path = "../../native/src/sha256.rs"]
 mod sha256;
 #[path = "../../native/src/base64.rs"]
 mod base64;
+#[path = "../../native/src/ed25519.rs"]
+mod ed25519;
+#[path = "../../native/src/x25519.rs"]
+mod x25519;
+#[path = "../../native/src/aes256gcm.rs"]
+mod aes256gcm;
 
 fn hex(data: &[u8]) -> String {
     use std::fmt::Write;
@@ -85,8 +92,7 @@ pub fn crypto_base64url_encode(_stores: &mut Stores, data: &str) -> String {
 // ── HKDF-SHA256 (RFC 5869) — base64 in/out, over the shared hmac_sha256 ──────
 
 /// HKDF-Extract (RFC 5869 §2.2): `PRK = HMAC-SHA256(salt, ikm)`, with an empty
-/// salt selecting the HashLen-zero default salt (HMAC zero-pads the key to the
-/// 64-byte block, so 32 zeros and the RFC default coincide).
+/// salt selecting the HashLen-zero default salt.
 fn hkdf_extract_raw(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
     let zeros = [0u8; 32];
     let salt = if salt.is_empty() { &zeros[..] } else { salt };
@@ -156,4 +162,57 @@ pub fn crypto_hkdf_sha256(
         Some(okm) => base64::encode(&okm),
         None => String::new(),
     }
+}
+
+// ── Ed25519 (RFC 8032) — base64 in/out, SHARED with native ──────────────────
+
+/// `crypto::ed25519_public_key(secret_key_b64) -> text` — 32-byte public key.
+pub fn crypto_ed25519_public_key(_stores: &mut Stores, sk_b64: &str) -> String {
+    ed25519::public_key(sk_b64)
+}
+
+/// `crypto::ed25519_sign(secret_key_b64, message_b64) -> text` — 64-byte signature.
+pub fn crypto_ed25519_sign(_stores: &mut Stores, sk_b64: &str, msg_b64: &str) -> String {
+    ed25519::sign(sk_b64, msg_b64)
+}
+
+/// `crypto::ed25519_verify(public_key_b64, message_b64, signature_b64) -> boolean`.
+pub fn crypto_ed25519_verify(
+    _stores: &mut Stores,
+    pk_b64: &str,
+    msg_b64: &str,
+    sig_b64: &str,
+) -> bool {
+    ed25519::verify(pk_b64, msg_b64, sig_b64)
+}
+
+// ── X25519 ECDH (RFC 7748) — base64 in/out, SHARED with native ──────────────
+
+/// `crypto::x25519_dh(secret_key_b64, public_key_b64) -> text` — 32-byte shared secret.
+pub fn crypto_x25519_dh(_stores: &mut Stores, sk_b64: &str, pk_b64: &str) -> String {
+    x25519::dh(sk_b64, pk_b64)
+}
+
+// ── AES-256-GCM AEAD — base64 in/out, SHARED with native ────────────────────
+
+/// `crypto::aes256gcm_seal(key_b64, nonce_b64, aad_b64, plaintext_b64) -> text`.
+pub fn crypto_aes256gcm_seal(
+    _stores: &mut Stores,
+    key_b64: &str,
+    nonce_b64: &str,
+    aad_b64: &str,
+    pt_b64: &str,
+) -> String {
+    aes256gcm::seal(key_b64, nonce_b64, aad_b64, pt_b64)
+}
+
+/// `crypto::aes256gcm_open(key_b64, nonce_b64, aad_b64, ciphertext_b64) -> text`.
+pub fn crypto_aes256gcm_open(
+    _stores: &mut Stores,
+    key_b64: &str,
+    nonce_b64: &str,
+    aad_b64: &str,
+    ct_b64: &str,
+) -> String {
+    aes256gcm::open(key_b64, nonce_b64, aad_b64, ct_b64)
 }

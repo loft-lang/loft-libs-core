@@ -17,3 +17,15 @@ crate-type = ["rlib"]
 # src/main.rs), not by this manifest.
 [dependencies]
 loft = { path = "../../../loft", default-features = false, features = ["random"] }
+
+# The vetted RustCrypto + dalek stack — the SAME crates + versions/features the
+# native cdylib uses (crypto/native/Cargo.toml), so the shared `#[path]` modules
+# (ed25519.rs / x25519.rs / aes256gcm.rs) compile identically here and the bytes
+# match native BY CONSTRUCTION.  The deterministic ops (sign/verify/dh/seal/open)
+# need NO RNG, so these compile to wasm32-unknown-unknown without getrandom /
+# wasm-bindgen.  `loft --html` provides them to rustc via a `-L dependency=…`
+# search path built from this manifest (see src/main.rs); `random_bytes` is NOT
+# here — it needs entropy and bridges via a synchronous getRandomValues host import.
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast"] }
+x25519-dalek  = { version = "2.0", default-features = false, features = ["static_secrets"] }
+aes-gcm       = { version = "0.10", default-features = false, features = ["aes", "alloc"] }

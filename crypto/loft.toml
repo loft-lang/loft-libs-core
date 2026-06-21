@@ -35,5 +35,13 @@ n_base64url_encode = "crypto_base64url_encode"
 n_hkdf_sha256 = "crypto_hkdf_sha256"
 n_hkdf_extract = "crypto_hkdf_extract"
 n_hkdf_expand = "crypto_hkdf_expand"
-# ed25519 / x25519 / aes256gcm / random_bytes are NOT routed yet — they need the
-# build-extension path (dalek/RustCrypto compiled to wasm); see @PLN84 ZT-B.
+# Ed25519 / X25519 / AES-256-GCM — SHARED dalek/RustCrypto modules, compiled to
+# wasm via the build-extension (`-L dependency` from this crate's Cargo deps).
+n_ed25519_public_key = "crypto_ed25519_public_key"
+n_ed25519_sign = "crypto_ed25519_sign"
+n_ed25519_verify = "crypto_ed25519_verify"
+n_x25519_dh = "crypto_x25519_dh"
+n_aes256gcm_seal = "crypto_aes256gcm_seal"
+n_aes256gcm_open = "crypto_aes256gcm_open"
+# random_bytes is NOT routed yet — it needs OS entropy (a synchronous
+# getRandomValues host import), not a pure-compute bridge.
