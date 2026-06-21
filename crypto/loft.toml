@@ -15,14 +15,25 @@ crate = "loft-crypto"
 # in `src/crypto.loft` (scanned by `loft-ffi-build`), so the register list
 # lives in exactly one place — no `[native.functions]` table to drift.
 
-# Browser-WASM bridge for `loft --html`.  `crypto::sha256` is a plain
-# `text -> text` native: it routes through the `wasm/` bridge crate's pure-Rust
-# `crypto_sha256` entry point, with NO Reference-out reshape (loft #407 — the
-# clean text-return bridge convention).  More primitives join `routes` as their
-# pure-Rust / host-backed bridges are added.
+# Browser-WASM bridge for `loft --html`.  Each routed `#native` runs through the
+# `wasm/` bridge crate's pure-Rust entry point, with NO Reference-out reshape for
+# text returns (loft #407 — the clean text-return bridge convention).  Hashing +
+# base64 share the native crate's zero-dep modules (native == wasm by construction);
+# HKDF is a pure-Rust RFC-5869 re-impl over the shared HMAC.
 [wasm.bridge]
 crate = "crypto-wasm"
 host_js = "wasm/host.js"
 
 [wasm.bridge.routes]
+# Hashing + base64 — shared zero-dep modules (native == wasm by construction).
 n_sha256 = "crypto_sha256"
+n_hmac_sha256 = "crypto_hmac_sha256"
+n_base64_encode = "crypto_base64_encode"
+n_base64_decode = "crypto_base64_decode"
+n_base64url_encode = "crypto_base64url_encode"
+# HKDF-SHA256 — pure-loft-safe re-impl over the shared hmac_sha256, RFC-5869-pinned.
+n_hkdf_sha256 = "crypto_hkdf_sha256"
+n_hkdf_extract = "crypto_hkdf_extract"
+n_hkdf_expand = "crypto_hkdf_expand"
+# ed25519 / x25519 / aes256gcm / random_bytes are NOT routed yet — they need the
+# build-extension path (dalek/RustCrypto compiled to wasm); see @PLN84 ZT-B.
