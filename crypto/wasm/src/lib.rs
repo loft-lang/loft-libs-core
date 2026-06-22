@@ -67,6 +67,14 @@ pub fn crypto_sha256(_stores: &mut Stores, data: &str) -> String {
     hex(&sha256::sha256(data.as_bytes()))
 }
 
+/// `crypto::sha256_b64(data_b64: text) -> text` — base64 SHA-256 of the raw
+/// bytes decoded from base64 `data_b64`, so non-UTF-8 input (ciphertext,
+/// canonical CBOR) can be hashed.  SHARED `sha256.rs`/`base64.rs` (`#[path]`),
+/// so the digest is byte-identical with native and `--interpret`.
+pub fn crypto_sha256_b64(_stores: &mut Stores, data_b64: &str) -> String {
+    base64::encode(&sha256::sha256(&base64::decode(data_b64)))
+}
+
 /// `crypto::hmac_sha256(key: text, data: text) -> text` — hex HMAC-SHA256.
 pub fn crypto_hmac_sha256(_stores: &mut Stores, key: &str, data: &str) -> String {
     hex(&sha256::hmac_sha256(key.as_bytes(), data.as_bytes()))
