@@ -1,6 +1,6 @@
 [package]
 name = "crypto"
-version = "0.2.1"
+version = "0.3.4"
 loft = ">=0.8"
 repository = "loft-libs-core"
 
@@ -27,10 +27,17 @@ host_js = "wasm/host.js"
 [wasm.bridge.routes]
 # Hashing + base64 — shared zero-dep modules (native == wasm by construction).
 n_sha256 = "crypto_sha256"
+n_sha256_b64 = "crypto_sha256_b64"
 n_hmac_sha256 = "crypto_hmac_sha256"
 n_base64_encode = "crypto_base64_encode"
 n_base64_decode = "crypto_base64_decode"
 n_base64url_encode = "crypto_base64url_encode"
+# Raw-byte <-> base64 (the ztcbor signing/hashing path).  The two vector<u8>
+# bridges read / allocate the byte vector in the in-process loft store (stride 1,
+# the Stores::fs_read_bytes / fs_write_bytes layout); bytes_concat_b64 is text-only.
+n_bytes_to_base64 = "crypto_bytes_to_base64"
+n_base64_to_bytes = "crypto_base64_to_bytes"
+n_bytes_concat_b64 = "crypto_bytes_concat_b64"
 # HKDF-SHA256 — pure-loft-safe re-impl over the shared hmac_sha256, RFC-5869-pinned.
 n_hkdf_sha256 = "crypto_hkdf_sha256"
 n_hkdf_extract = "crypto_hkdf_extract"

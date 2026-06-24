@@ -36,6 +36,7 @@
 #![allow(dead_code)] // exposed for codegen-emitted call sites
 
 use loft::database::Stores;
+use loft::keys::DbRef;
 
 // Shared with native — same source => byte-identical output.  The first two are
 // dependency-free; the last three pull the dalek/RustCrypto crates (Cargo.toml),
@@ -67,6 +68,13 @@ pub fn crypto_sha256(_stores: &mut Stores, data: &str) -> String {
     hex(&sha256::sha256(data.as_bytes()))
 }
 
+/// `crypto::sha256_b64(data_b64: text) -> text` — base64 SHA-256 of the raw bytes
+/// decoded from base64 `data_b64`.  Lets callers hash arbitrary (non-UTF-8) bytes;
+/// mirrors the native `n_sha256_b64` (the `content_hash` path, §4/§6).
+pub fn crypto_sha256_b64(_stores: &mut Stores, data_b64: &str) -> String {
+    base64::encode(&sha256::sha256(&base64::decode(data_b64)))
+}
+
 /// `crypto::hmac_sha256(key: text, data: text) -> text` — hex HMAC-SHA256.
 pub fn crypto_hmac_sha256(_stores: &mut Stores, key: &str, data: &str) -> String {
     hex(&sha256::hmac_sha256(key.as_bytes(), data.as_bytes()))
@@ -88,6 +96,57 @@ pub fn crypto_base64_decode(_stores: &mut Stores, data: &str) -> String {
 /// `crypto::base64url_encode(data: text) -> text` — URL-safe base64, no padding.
 pub fn crypto_base64url_encode(_stores: &mut Stores, data: &str) -> String {
     base64::encode_url(data.as_bytes())
+}
+
+// ── Raw-byte <-> base64 (the ztcbor signing / content_hash path) ────────────
+//
+// loft `text` is UTF-8-validated, so non-UTF-8 byte strings (DH outputs, digests,
+// canonical-CBOR records) cannot ride as `text`; loft assembles them in a
+// `vector<u8>` and crosses the base64 boundary here.  The two vector<u8> bridges
+// read / allocate the byte vector in the IN-PROCESS loft store through the SAME
+// layout `Stores::fs_read_bytes` / `fs_write_bytes` use (element stride 1: a
+// 4-byte outer vector pointer to an inner record whose payload is one byte per
+// element) — so `native == wasm` holds by construction.  `bytes_concat_b64` is
+// pure text-in / text-out and never touches the store.
+
+/// `crypto::bytes_to_base64(bytes: vector<u8>) -> text` — standard base64 of a
+/// `vector<u8>`.  A null / empty vector encodes to "".  Reads the byte payload
+/// exactly as `Stores::fs_write_bytes` does.
+pub fn crypto_bytes_to_base64(stores: &mut Stores, bytes: &DbRef) -> String {
+    let length = loft::vector::length_vector(bytes, &stores.allocations);
+    let data: Vec<u8> = if bytes.rec == 0 || bytes.pos == 0 || length == 0 {
+        Vec::new()
+    } else {
+        let store = stores.store_mut(bytes);
+        let vec_rec = store.get_u32_raw(bytes.rec, bytes.pos);
+        if vec_rec == 0 {
+            Vec::new()
+        } else {
+            store.buffer(vec_rec)[..length as usize].to_vec()
+        }
+    };
+    base64::encode(&data)
+}
+
+/// `crypto::base64_to_bytes(b64: text) -> vector<u8>` — `vector<u8>` from standard
+/// base64 `text`.  A malformed / empty string yields an empty vector.  Allocates
+/// the result vector exactly as `Stores::fs_read_bytes` does (stride 1).
+pub fn crypto_base64_to_bytes(stores: &mut Stores, b64: &str) -> DbRef {
+    let data = base64::decode(b64);
+    let vec = stores.database(4);
+    let count = data.len() as u32;
+    let rec = loft::vector::alloc_vector_from_bytes(stores.store_mut(&vec), 1, count, &data);
+    stores.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, rec);
+    vec
+}
+
+/// `crypto::bytes_concat_b64(a_b64, b_b64: text) -> text` — base64 of
+/// `bytes(a) || bytes(b)`.  Pure text-in / text-out (no store interaction), so
+/// loft can assemble labeled byte strings by repeated concatenation.
+pub fn crypto_bytes_concat_b64(_stores: &mut Stores, a_b64: &str, b_b64: &str) -> String {
+    let mut bytes = base64::decode(a_b64);
+    bytes.extend_from_slice(&base64::decode(b_b64));
+    base64::encode(&bytes)
 }
 
 // ── HKDF-SHA256 (RFC 5869) — base64 in/out, over the shared hmac_sha256 ──────

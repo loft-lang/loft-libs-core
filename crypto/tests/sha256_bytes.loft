@@ -1,0 +1,21 @@
+// Raw-byte <-> base64 bridge KATs: sha256_b64, bytes_to_base64, base64_to_bytes,
+// bytes_concat_b64 — the ztcbor signing / content_hash path.  MUST give the
+// identical result on interpret / --native / --native-wasm / --html: this file is
+// the parity check for the four byte bridges the wasm gate depends on.
+use crypto;
+fn main() {
+  // sha256_b64 (Python hashlib vectors) — raw / non-UTF-8 byte hashing.
+  assert(sha256_b64("") == "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=", "empty");
+  assert(sha256_b64("/w==") == "qBAK5qoZQNC2Y7sxzUZhQuu9vVGHExuS2TgYmHgy64k=", "0xff");
+  // bytes_to_base64 — vector<u8> arg crossing the store boundary.
+  assert(bytes_to_base64([255 as u8]) == "/w==", "bytes_to_base64 0xff");
+  assert(sha256_b64(bytes_to_base64([255 as u8])) == "qBAK5qoZQNC2Y7sxzUZhQuu9vVGHExuS2TgYmHgy64k=", "via bytes_to_base64");
+  // base64_to_bytes — vector<u8> return crossing the store boundary; inverse of
+  // bytes_to_base64 for any byte string (incl. non-UTF-8 and empty).
+  assert(bytes_to_base64(base64_to_bytes("/w==")) == "/w==", "round-trip 0xff");
+  assert(bytes_to_base64(base64_to_bytes("")) == "", "round-trip empty");
+  assert(bytes_to_base64(base64_to_bytes("AAECAwT/")) == "AAECAwT/", "round-trip multi-byte");
+  assert(len(base64_to_bytes("AAECAwT/")) == 6, "decoded length");
+  // (bytes_concat_b64 is internal — exercised by the HPKE tests, not public API.)
+  println("crypto: byte-bridge KATs pass");
+}
