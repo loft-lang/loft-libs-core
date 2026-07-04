@@ -5,7 +5,7 @@
 
 // Returns a random integer in [lo, hi] (inclusive).
 // Returns null when lo > hi or when either argument is null.
-pub fn rand(lo: integer, hi: integer) -> integer;
+pub fn rand(lo: integer, hi: integer) -> integer?;
 #native
 
 // Seeds the thread-local random number generator with the given value.
@@ -41,8 +41,8 @@ pub fn rand_indices(n: integer) -> vector<integer>;
 //   p = r.indices(52);        // a shuffled deck from THIS stream
 
 pub struct RandStream {
-  s1: integer not null,   // Lehmer state A in [1, 2147483562]
-  s2: integer not null,   // Lehmer state B in [1, 2147483398]
+  s1: integer,   // Lehmer state A in [1, 2147483562]
+  s2: integer,   // Lehmer state B in [1, 2147483398]
 }
 
 // Seed an independent stream. Any integer seed is valid (negative and zero included);
@@ -59,7 +59,7 @@ pub fn seed_stream(seed: integer) -> RandStream {
 
 // A random integer in [lo, hi] (inclusive) from THIS stream, advancing it.
 // Returns null when lo > hi (the same contract as the global rand()).
-pub fn get(self: RandStream, lo: integer, hi: integer) -> integer {
+pub fn get(self: RandStream, lo: integer, hi: integer) -> integer? {
   if lo > hi { return null; }
   // L'Ecuyer combined LCG, Schrage's method (all products < 2^31 * 40692 — trap-safe)
   k1 = self.s1 / 53668 ?? 0;

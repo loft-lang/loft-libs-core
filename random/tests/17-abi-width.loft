@@ -1,0 +1,20 @@
+// ABI-width cells — negative and beyond-i32 values must cross the
+// native boundary intact (the old i32 extern truncated them silently).
+use random;
+
+fn main() {
+  random::rand_seed(7);
+  ok = true;
+  for _ in 0..200 {
+    r = random::rand(-20, -10) ?? 0;
+    if r < -20 || r > -10 { ok = false; }
+  }
+  assert(ok, "rand stays in [-20, -10]");
+  wide = random::rand(1099511627776, 1099511627776) ?? 0;
+  assert(wide == 1099511627776, "rand(2^40, 2^40) returns 2^40 exactly, got {wide}");
+  lo_wide = random::rand(1099511627776, 1099511627876) ?? 0;
+  assert(lo_wide >= 1099511627776 && lo_wide <= 1099511627876, "wide range stays in bounds, got {lo_wide}");
+  mixed = random::rand(-3, 3) ?? -99;
+  assert(mixed >= -3 && mixed <= 3, "sign-crossing range in bounds, got {mixed}");
+  println("probe_wide ok");
+}

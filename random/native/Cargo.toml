@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 loft-ffi = "0.1"
+loft-ffi-macros = "0.1"
 rand_core = { version = "0.9", features = ["os_rng"] }
 rand_pcg = "0.9"
 
