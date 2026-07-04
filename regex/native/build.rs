@@ -8,5 +8,5 @@
 //! drift.  Bare `#native` → `n_<fn>`.  `include!`d by `src/lib.rs`.
 
 fn main() {
-    loft_ffi_build::generate_register_from_loft("../src");
+    loft_ffi_build::generate_register_from_loft_with_bridges("../src");
 }
