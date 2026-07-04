@@ -19,7 +19,7 @@ loft install random
 
 | Function | Returns | Notes |
 |---|---|---|
-| `rand(lo: integer, hi: integer) -> integer` | uniform integer in `[lo, hi]` (inclusive) | returns `null` if `lo > hi` or either bound is null |
+| `rand(lo: integer, hi: integer) -> integer?` | uniform integer in `[lo, hi]` (inclusive) | returns `null` if `lo > hi` or either bound is null |
 | `rand_seed(seed: integer)` | — | reseed the thread-local PRNG deterministically |
 | `rand_indices(n: integer) -> vector<integer>` | `[0..n)` in random order | Fisher-Yates shuffle; returns empty for `n <= 0` |
 
