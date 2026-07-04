@@ -183,7 +183,7 @@ pub fn has(self: Args, name: text) -> boolean {
   false
 }
 
-pub fn get(self: Args, name: text) -> text {
+pub fn get(self: Args, name: text) -> text? {
   results = self.results;
   get_idx = -1;
   for go in self.options {
@@ -191,9 +191,6 @@ pub fn get(self: Args, name: text) -> text {
   }
   if get_idx < 0 { get_idx = 0; }
   // The bound guard silences the v[i] warning via skip-pattern 5.
-  // The else-branch returning bare `null` requires @P385 to be
-  // fixed in loft main (relaxed `OpConv*FromNull` type match);
-  // without it the parser errors "expected text, got null on else".
   if get_idx < len(results) {
     results[get_idx]
   } else {
@@ -202,7 +199,7 @@ pub fn get(self: Args, name: text) -> text {
 }
 
 pub fn ok(self: Args) -> boolean {
-  !self.err || len(self.err) == 0
+  len(self.err) == 0
 }
 
 pub fn error_msg(self: Args) -> text {
@@ -214,7 +211,7 @@ pub fn help(self: Args) -> text {
   h += "\nUsage: " + self.name + " [OPTIONS] [ARGS]\n\nOptions:\n";
   for hp in self.options {
     h += "  ";
-    if !hp.short_name || len(hp.short_name) == 0 {
+    if len(hp.short_name) == 0 {
       h += "    ";
     } else {
       h += "-" + hp.short_name + ", ";

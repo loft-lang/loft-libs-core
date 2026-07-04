@@ -26,6 +26,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+use loft_ffi_macros::loft_native;
 use regex::Regex;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -67,6 +68,7 @@ fn with_compiled<R>(pat: &str, miss: R, f: impl FnOnce(&Regex) -> R) -> R {
 /// `#native "n_is_match"` — true if `pattern` matches anywhere in `input`.
 /// An invalid pattern returns false.  (The loft-side `matches` / `text`
 /// method wraps this.)
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_is_match(
     pat_ptr: *const u8,
@@ -82,6 +84,7 @@ pub unsafe extern "C" fn n_is_match(
 /// `#native "n_match_start"` — byte offset of the START of the first match
 /// of `pattern` in `input`, or `i64::MIN` (loft `null`) when there is no
 /// match / the pattern is invalid.  The loft-side `find` wraps this.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_match_start(
     pat_ptr: *const u8,
@@ -99,6 +102,7 @@ pub unsafe extern "C" fn n_match_start(
 /// `#native "n_match_end"` — byte offset of the END of the first match of
 /// `pattern` in `input`, or `i64::MIN` (loft `null`) when there is no match
 /// / the pattern is invalid.  Used by the loft-side `split` iterator.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_match_end(
     pat_ptr: *const u8,
