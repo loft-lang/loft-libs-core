@@ -42,30 +42,30 @@ pub struct CborEntry {
 fn head(major: integer, arg: integer) -> vector<u8> {
   buf: vector<u8> = [];
   if arg < 24 {
-    buf += [(major * 32 + arg) as u8];
+    buf += [((major * 32 + arg) & 255) as u8];
   } else if arg < 256 {
-    buf += [(major * 32 + 24) as u8];
-    buf += [arg as u8];
+    buf += [((major * 32 + 24) & 255) as u8];
+    buf += [(arg & 255) as u8];
   } else if arg < 65536 {
-    buf += [(major * 32 + 25) as u8];
-    buf += [(arg / 256) as u8];
-    buf += [(arg % 256) as u8];
+    buf += [((major * 32 + 25) & 255) as u8];
+    buf += [((arg / 256) & 255) as u8];
+    buf += [((arg % 256) & 255) as u8];
   } else if arg < 4294967296 {
-    buf += [(major * 32 + 26) as u8];
-    buf += [(arg / 16777216 % 256) as u8];
-    buf += [(arg / 65536 % 256) as u8];
-    buf += [(arg / 256 % 256) as u8];
-    buf += [(arg % 256) as u8];
+    buf += [((major * 32 + 26) & 255) as u8];
+    buf += [((arg / 16777216 % 256) & 255) as u8];
+    buf += [((arg / 65536 % 256) & 255) as u8];
+    buf += [((arg / 256 % 256) & 255) as u8];
+    buf += [((arg % 256) & 255) as u8];
   } else {
-    buf += [(major * 32 + 27) as u8];
-    buf += [(arg / 72057594037927936 % 256) as u8];
-    buf += [(arg / 281474976710656 % 256) as u8];
-    buf += [(arg / 1099511627776 % 256) as u8];
-    buf += [(arg / 4294967296 % 256) as u8];
-    buf += [(arg / 16777216 % 256) as u8];
-    buf += [(arg / 65536 % 256) as u8];
-    buf += [(arg / 256 % 256) as u8];
-    buf += [(arg % 256) as u8];
+    buf += [((major * 32 + 27) & 255) as u8];
+    buf += [((arg / 72057594037927936 % 256) & 255) as u8];
+    buf += [((arg / 281474976710656 % 256) & 255) as u8];
+    buf += [((arg / 1099511627776 % 256) & 255) as u8];
+    buf += [((arg / 4294967296 % 256) & 255) as u8];
+    buf += [((arg / 16777216 % 256) & 255) as u8];
+    buf += [((arg / 65536 % 256) & 255) as u8];
+    buf += [((arg / 256 % 256) & 255) as u8];
+    buf += [((arg % 256) & 255) as u8];
   }
   return buf;
 }
@@ -124,7 +124,7 @@ pub fn encode(v: CborValue) -> vector<u8> {
     CText { value } => {
       n = len(value);
       buf = head(3, n);
-      for i in 0..n { buf += [value.byte_at(i) as u8]; }
+      for i in 0..n { buf += [(value.byte_at(i) & 255) as u8]; }
       buf
     },
     CArray { items } => {
@@ -154,7 +154,7 @@ pub struct Decoded {
 fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
   n = len(bytes);
   if pos >= n { return Decoded { value: CNull, next: pos, ok: false }; }
-  b = bytes[pos] ?? 0;
+  b = bytes[pos];
   major = b / 32;
   info = b % 32;
   // --- argument (length / integer payload), canonical shortest-form ---
@@ -195,13 +195,13 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
   if major == 2 {
     if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
     bs: vector<u8> = [];
-    for k in 0..arg { kb = bytes[argpos + k] ?? (0 as u8); bs += [kb]; }
+    for k in 0..arg { bs += [bytes[argpos + k]]; }
     return Decoded { value: CBytes { value: bs }, next: argpos + arg, ok: true };
   }
   if major == 3 {
     if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
     tb: vector<u8> = [];
-    for k in 0..arg { kb = bytes[argpos + k] ?? (0 as u8); tb += [kb]; }
+    for k in 0..arg { tb += [bytes[argpos + k]]; }
     return Decoded { value: CText { value: text_from_bytes(tb) }, next: argpos + arg, ok: true };
   }
   if major == 4 {
