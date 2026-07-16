@@ -1,166 +1,344 @@
-// Copyright (c) 2024 Jurjen Stellingwerff
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // --- Arguments ---
-// Command-line argument parsing library.
+// A GNU-style command-line argument parser with auto-generated `--help`.
+//
+// Declare options against an `Args`, then `parse(argv)`.  Supports the GNU
+// getopt_long surface: long options (`--name`, `--name=value`, `--name value`),
+// short options (`-n`, `-n value`, `-nvalue`, bundled `-abc`), unambiguous long
+// prefix abbreviation (`--verb` for `--verbose`), optional-argument options, the
+// `--` end-of-options marker, and interspersed positionals.  Opt-in `enable_help()`
+// wires `--help` / `--version` and lets `help()` render a GNU-format help screen
+// generated from the declared options.
+//
+// The parsing core is written with the @PLN35 cursor/match-PEG engine: `classify`
+// lexes each argv element into a `Tok` (using the option table), then a cursor
+// `match` drives the token stream — the `[ NeedVal, Pos ]` vs `[ NeedVal ]`
+// sequence decides whether an option consumes the following word.
 
-enum ArgKind { Flag, Value }
+// A declared option's shape.  `Flag` takes no value; `Value` requires one
+// (`--out x` / `--out=x` / `-ox`); `Optional` accepts one only when glued
+// (`--color=auto` / `-cauto`), otherwise it is "present with no value".
+enum ArgKind { Flag, Value, Optional }
 
 struct Arg {
-  short_name: text,
-  long_name: text,
-  arg_name: text,
-  kind: ArgKind,
-  mandatory: boolean,
-  description: text
+  const short_name: text,
+  const long_name: text,
+  const arg_name: text,
+  const kind: ArgKind,
+  const mandatory: boolean,
+  const description: text,
 }
+
+// A classified argv element (the output of `classify`).  Resolving `=`/glued
+// values and flag-vs-value happens here against the option table; the cross-token
+// "option then its value word" pairing is left to the cursor grammar in `parse`.
+enum Tok {
+  OptFlag { idx: integer },              // a flag was given (long, or a short in a cluster)
+  NeedVal { idx: integer },              // a value option whose value must come from the next word
+  HasVal  { idx: integer, value: text }, // a value/optional option with its value already resolved
+  Pos     { word: text },                // a positional, or a post-`--` literal, or an option's value
+  Bad     { msg: text },                 // a lexer-detected error (unknown / ambiguous / no-arg-allowed)
+}
+
+// A parser-combinator cursor over the classified token stream: a cursor `match`
+// prefix-consumes from `pos` and advances it (see @PLN35).
+struct Cur { const src: vector<Tok>, pos: integer }
 
 struct Args {
-  name: text,
-  version: text,
-  description: text,
-  // `not null` on the vector fields silences the field-level
-  // "is read N times and never defended" warning under
-  // LOFT_DENY_WARNINGS=1.  Safe: `create` initialises each to `[]`
-  // (non-null empty), and the only writers append/index-assign —
-  // neither path produces null.
-  options: vector<Arg> not null,
-  results: vector<text> not null,
-  positionals: vector<text> not null,
-  err: text
+  const name: text,
+  const version: text,
+  const description: text,
+  // Positional synopsis shown after `[OPTION...]` on the usage line, e.g. "[FILE...]".
+  usage: text,
+  // "Report bugs to <…>." footer, when set.
+  bug_address: text,
+  // Free trailing text printed after the option list.
+  epilog: text,
+  const options: vector<Arg>,
+  // Parallel to `options`: each option's resolved value, or null when unset.
+  const results: vector<text?>,
+  positionals: vector<text>,
+  help_enabled: boolean,
+  help_idx: integer,
+  version_idx: integer,
+  want_help: boolean,
+  want_version: boolean,
+  err: text,
 }
+
+// The column where option descriptions begin in `help()` (GNU argp default).
+const HELP_COL = 29;
+// The total help line width descriptions wrap at.
+const HELP_WIDTH = 79;
 
 pub fn create(name: text, version: text, description: text) -> Args {
-  Args { name: name, version: version, description: description, options: [], results: [], positionals: [], err: "" }
+  Args {
+    name: name, version: version, description: description,
+    usage: "", bug_address: "", epilog: "",
+    options: [], results: [], positionals: [],
+    help_enabled: false, help_idx: -1, version_idx: -1,
+    want_help: false, want_version: false, err: "",
+  }
 }
 
+// --- Declaring options ---
+
+fn register(self: Args, s: text, l: text, an: text, k: ArgKind, req: boolean, desc: text) -> integer {
+  self.options += [Arg {
+    short_name: s, long_name: l, arg_name: an, kind: k, mandatory: req, description: desc,
+  }];
+  self.results += null;
+  self.options.len() - 1
+}
+
+// A boolean flag (`--verbose` / `-v`).
 pub fn flag(self: Args, opt_short: text, opt_long: text, desc: text) {
-  self.options += [Arg { short_name: opt_short, long_name: opt_long, arg_name: "", kind: ArgKind.Flag, mandatory: false, description: desc }];
-  self.results += null;
+  self.register(opt_short, opt_long, "", ArgKind.Flag, false, desc);
 }
 
+// An optional value option (`--output FILE`).  `arg_name` is the metavar shown in help.
 pub fn option(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text) {
-  self.options += [Arg { short_name: opt_short, long_name: opt_long, arg_name: arg_name, kind: ArgKind.Value, mandatory: false, description: desc }];
-  self.results += null;
+  self.register(opt_short, opt_long, arg_name, ArgKind.Value, false, desc);
 }
 
+// A required value option: `parse` fails if it is absent.
 pub fn required(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text) {
-  self.options += [Arg { short_name: opt_short, long_name: opt_long, arg_name: arg_name, kind: ArgKind.Value, mandatory: true, description: desc }];
-  self.results += null;
+  self.register(opt_short, opt_long, arg_name, ArgKind.Value, true, desc);
 }
 
+// An optional-argument option: its value attaches only via `=` / glued form
+// (`--color=auto`, `-cauto`); given bare (`--color`) it is present with value "".
+pub fn optional(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text) {
+  self.register(opt_short, opt_long, arg_name, ArgKind.Optional, false, desc);
+}
+
+// Set the positional synopsis for the usage line (e.g. "[FILE...]").
+pub fn set_usage(self: Args, synopsis: text) { self.usage = synopsis; }
+
+// Set the "Report bugs to <addr>." help footer.
+pub fn set_bug_address(self: Args, address: text) { self.bug_address = address; }
+
+// Set free text printed after the option list in help.
+pub fn set_epilog(self: Args, epilog: text) { self.epilog = epilog; }
+
+// Opt-in: register `--help`/`-h` and `--version`/`-V` (short forms only when free),
+// so `parse` records `--help`/`--version` and `help()` lists them.  Nothing is
+// auto-printed — the caller checks `wants_help()` / `wants_version()`.
+pub fn enable_help(self: Args) {
+  self.help_enabled = true;
+  hshort = if self.short_taken("h") { "" } else { "h" };
+  self.help_idx = self.register(hshort, "help", "", ArgKind.Flag, false, "display this help and exit");
+  vshort = if self.short_taken("V") { "" } else { "V" };
+  self.version_idx = self.register(vshort, "version", "", ArgKind.Flag, false, "output version information and exit");
+}
+
+fn short_taken(self: Args, ch: text) -> boolean {
+  for so in self.options {
+    if so.short_name == ch { return true }
+  }
+  false
+}
+
+// --- Option lookup ---
+
+// Find a long option by name, allowing an unambiguous prefix abbreviation.
+// Returns the index, -1 for unknown, or -2 for an ambiguous prefix.
 fn find_long_opt(self: Args, fname: text) -> integer {
   for fo in self.options {
     if fo.long_name == fname { return fo#index }
   }
+  fmatch = -1;
+  fcount = 0;
+  for fo2 in self.options {
+    if fo2.long_name.len() > 0 && fo2.long_name.starts_with(fname) {
+      fmatch = fo2#index;
+      fcount += 1;
+    }
+  }
+  if fcount == 1 { return fmatch }
+  if fcount > 1 { return -2 }
   -1
 }
 
 fn find_short_opt(self: Args, fch: character) -> integer {
   for fso in self.options {
-    if len(fso.short_name) > 0 {
-      if "{fch}" == fso.short_name { return fso#index }
-    }
+    if fso.short_name.len() > 0 && "{fch}" == fso.short_name { return fso#index }
   }
   -1
 }
 
-pub fn parse(self: Args, argv: vector<text>) -> boolean {
-  self.err = "";
-  p_pending = -1;
-  p_past = false;
-  // `options` is a read-only local copy of the immutable option list
-  // (kind/length lookups only).  Result VALUES are written through
-  // `self.results[i]` directly: a struct vector-field read COPIES (loft
-  // value semantics, @PLN85 #415), so a captured `results = self.results`
-  // local would be a copy and index-writes to it would never reach the
-  // field — every write below, and the mandatory-check read, target
-  // `self.results`.  Each access is guarded by `i < len(self.results)`.
-  options = self.options;
-  for pa in argv {
-    if p_pending >= 0 {
-      if p_pending < len(self.results) {
-        self.results[p_pending] = pa;
-      }
-      p_pending = -1;
-    } else if p_past {
-      self.positionals += [pa];
-    } else if pa == "--" {
-      p_past = true;
-    } else if pa.starts_with("--") {
-      p_long = pa[2..];
-      p_eq = p_long.find("=");
-      if !p_eq {
-        p_idx = self.find_long_opt(p_long);
-        if p_idx < 0 {
-          self.err = "Unknown option: --{p_long}";
-          return false
-        }
-        if p_idx < len(options) {
-          if options[p_idx].kind == ArgKind.Flag {
-            if p_idx < len(self.results) {
-              self.results[p_idx] = "true";
-            }
+// The comma-separated candidate list for an ambiguous long prefix (for the error).
+fn ambiguous_matches(self: Args, name: text) -> text {
+  am = "";
+  for ao in self.options {
+    if ao.long_name.len() > 0 && ao.long_name.starts_with(name) {
+      if am.len() > 0 { am += ", "; }
+      am += "'--{ao.long_name}'";
+    }
+  }
+  am
+}
+
+fn opt_kind(self: Args, idx: integer) -> ArgKind {
+  ki = ArgKind.Flag;
+  for ko in self.options {
+    if ko#index == idx { ki = ko.kind; }
+  }
+  ki
+}
+
+fn opt_label(self: Args, idx: integer) -> text {
+  lbl = "";
+  for lo in self.options {
+    if lo#index == idx {
+      if lo.long_name.len() > 0 { lbl = "--{lo.long_name}"; }
+      else { lbl = "-{lo.short_name}"; }
+    }
+  }
+  lbl
+}
+
+// --- Lexing: argv -> vector<Tok> (table-informed) ---
+
+fn classify(self: Args, argv: vector<text>) -> vector<Tok> {
+  toks: vector<Tok> = [];
+  past = false;
+  for arg in argv {
+    if past {
+      toks += [Pos { word: arg }];
+    } else if arg == "--" {
+      past = true;
+    } else if arg == "-" {
+      toks += [Pos { word: "-" }];
+    } else if arg.starts_with("--") {
+      body = arg[2..];
+      eq = body.find("=");
+      if eq == null {
+        li = self.find_long_opt(body);
+        if li == -2 {
+          toks += [Bad { msg: "option '--{body}' is ambiguous; candidates: {self.ambiguous_matches(body)}" }];
+        } else if li < 0 {
+          toks += [Bad { msg: "unrecognized option '--{body}'" }];
+        } else {
+          lkind = self.opt_kind(li);
+          if lkind == ArgKind.Flag {
+            toks += [OptFlag { idx: li }];
+          } else if lkind == ArgKind.Optional {
+            toks += [HasVal { idx: li, value: "" }];
           } else {
-            p_pending = p_idx;
+            toks += [NeedVal { idx: li }];
           }
         }
       } else {
-        p_name = p_long[0..p_eq];
-        p_val = p_long[p_eq + 1..];
-        p_idx = self.find_long_opt(p_name);
-        if p_idx < 0 {
-          self.err = "Unknown option: --{p_name}";
-          return false
-        }
-        if p_idx < len(self.results) {
-          self.results[p_idx] = p_val;
+        lname = body[0..eq];
+        lval = body[eq + 1..];
+        li2 = self.find_long_opt(lname);
+        if li2 == -2 {
+          toks += [Bad { msg: "option '--{lname}' is ambiguous; candidates: {self.ambiguous_matches(lname)}" }];
+        } else if li2 < 0 {
+          toks += [Bad { msg: "unrecognized option '--{lname}'" }];
+        } else if self.opt_kind(li2) == ArgKind.Flag {
+          toks += [Bad { msg: "option '--{lname}' doesn't allow an argument" }];
+        } else {
+          toks += [HasVal { idx: li2, value: lval }];
         }
       }
-    } else if len(pa) > 1 && pa.starts_with("-") {
-      for pc in pa[1..] {
-        if p_pending >= 0 {
-          if p_pending < len(self.results) {
-            self.results[p_pending] = pa[pc#index + 1..];
-          }
-          p_pending = -1;
+    } else if arg.len() > 1 && arg.starts_with("-") {
+      cluster = arg[1..];
+      for ch in cluster {
+        si = self.find_short_opt(ch);
+        if si < 0 {
+          toks += [Bad { msg: "invalid option -- '{ch}'" }];
           break
         }
-        p_si = self.find_short_opt(pc);
-        if p_si < 0 {
-          self.err = "Unknown option: -{pc}";
-          return false
-        }
-        if p_si < len(options) {
-          if options[p_si].kind == ArgKind.Flag {
-            if p_si < len(self.results) {
-              self.results[p_si] = "true";
-            }
+        if self.opt_kind(si) == ArgKind.Flag {
+          toks += [OptFlag { idx: si }];
+        } else {
+          rest = cluster[ch#index + 1..];
+          if rest.len() > 0 {
+            toks += [HasVal { idx: si, value: rest }];
+          } else if self.opt_kind(si) == ArgKind.Optional {
+            toks += [HasVal { idx: si, value: "" }];
           } else {
-            p_pending = p_si;
+            toks += [NeedVal { idx: si }];
           }
+          break
         }
       }
     } else {
-      self.positionals += [pa];
+      toks += [Pos { word: arg }];
     }
   }
-  if p_pending >= 0 {
-    if p_pending < len(options) {
-      self.err = "Option --{options[p_pending].long_name} requires a value";
-    }
-    return false
+  toks
+}
+
+// --- Parsing: cursor/match-PEG driver over the token stream ---
+
+pub fn parse(self: Args, argv: vector<text>) -> boolean {
+  self.err = "";
+  self.want_help = false;
+  self.want_version = false;
+  self.positionals = [];
+  ri = 0;
+  while ri < self.results.len() {
+    self.results[ri] = null;
+    ri += 1;
   }
-  for pm in self.options {
-    if pm.mandatory {
-      // pm#index is the for-loop position into self.options.
-      // self.results is kept in lockstep (see flag/option/required
-      // above); the explicit `< len(results)` check makes the
-      // in-bounds proof visible to the parser.
-      mi = pm#index;
-      if mi < len(self.results) {
-        val = self.results[mi];
-        if val == null {
-          self.err = "Required option --{pm.long_name} is missing";
+
+  toks = self.classify(argv);
+  cur = Cur { src: toks, pos: 0 };
+  guard = 0;
+  while cur.pos < cur.src.len() {
+    guard += 1;
+    if guard > 1000000 { break }
+    // Each arm consumes a prefix and advances the cursor.  `[ NeedVal, Pos ]`
+    // (tried first) pairs a value option with the following word; if no word
+    // follows, `[ NeedVal ]` reports the missing argument.
+    code = match cur {
+      [ NeedVal { idx }, Pos { word } ] => {
+        if idx < self.results.len() { self.results[idx] = word; }
+        "ok"
+      },
+      [ NeedVal { idx } ] => {
+        self.err = "option '{self.opt_label(idx)}' requires an argument";
+        "err"
+      },
+      [ HasVal { idx, value } ] => {
+        if idx < self.results.len() { self.results[idx] = value; }
+        "ok"
+      },
+      [ OptFlag { idx } ] => {
+        if idx < self.results.len() { self.results[idx] = "true"; }
+        if self.help_enabled && idx == self.help_idx { self.want_help = true; }
+        if self.help_enabled && idx == self.version_idx { self.want_version = true; }
+        "ok"
+      },
+      [ Pos { word } ] => {
+        self.positionals += [word];
+        "ok"
+      },
+      [ Bad { msg } ] => {
+        self.err = msg;
+        "err"
+      },
+      _ => "stop",
+    };
+    if code == "err" { return false }
+    if code == "stop" { break }
+  }
+
+  // `--help` / `--version` short-circuit the required-option check (GNU prints
+  // help and exits without validating).
+  if self.want_help || self.want_version { return true }
+
+  for mo in self.options {
+    if mo.mandatory {
+      mi = mo#index;
+      if mi < self.results.len() {
+        mval = self.results[mi];
+        if mval == null {
+          self.err = "option '{self.opt_label(mi)}' is required";
           return false
         }
       }
@@ -169,62 +347,138 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
   true
 }
 
+// --- Querying results ---
+
 pub fn has(self: Args, name: text) -> boolean {
-  results = self.results;
   for ho in self.options {
     if ho.long_name == name {
       hi = ho#index;
-      if hi < len(results) {
-        return results[hi] != null
-      }
+      if hi < self.results.len() { return self.results[hi] != null }
       return false
     }
   }
   false
 }
 
-pub fn get(self: Args, name: text) -> text {
-  results = self.results;
-  get_idx = -1;
+pub fn get(self: Args, name: text) -> text? {
   for go in self.options {
-    if go.long_name == name { get_idx = go#index; }
+    if go.long_name == name {
+      gi = go#index;
+      if gi < self.results.len() { return self.results[gi] }
+      return null
+    }
   }
-  if get_idx < 0 { get_idx = 0; }
-  // The bound guard silences the v[i] warning via skip-pattern 5.
-  // The else-branch returning bare `null` requires @P385 to be
-  // fixed in loft main (relaxed `OpConv*FromNull` type match);
-  // without it the parser errors "expected text, got null on else".
-  if get_idx < len(results) {
-    results[get_idx]
+  null
+}
+
+// The option's value, or `fallback` when unset.
+pub fn get_or(self: Args, name: text, fallback: text) -> text {
+  self.get(name) ?? fallback
+}
+
+// The option's value parsed as an integer, or null when unset or non-numeric.
+pub fn get_int(self: Args, name: text) -> integer? {
+  gv = self.get(name);
+  if !gv { return null }
+  (gv ?? "") as integer?
+}
+
+pub fn ok(self: Args) -> boolean { self.err.len() == 0 }
+
+pub fn error_msg(self: Args) -> text { self.err }
+
+pub fn wants_help(self: Args) -> boolean { self.want_help }
+
+pub fn wants_version(self: Args) -> boolean { self.want_version }
+
+pub fn version_text(self: Args) -> text { "{self.name} {self.version}" }
+
+// The GNU "Try '<prog> --help' …" hint to print alongside a parse error.
+pub fn try_help(self: Args) -> text {
+  "Try '{self.name} --help' for more information."
+}
+
+// --- Auto-generated GNU-style help ---
+
+fn spaces(n: integer) -> text {
+  sp = "";
+  si = 0;
+  while si < n { sp += " "; si += 1; }
+  sp
+}
+
+// The flag column for one option, e.g. "  -o, --output=FILE" or "      --help".
+fn option_left(a: Arg) -> text {
+  s = "  ";
+  if a.short_name.len() > 0 {
+    s += "-{a.short_name}";
+    if a.long_name.len() > 0 { s += ", "; }
   } else {
-    null
+    s += "    ";
   }
-}
-
-pub fn ok(self: Args) -> boolean {
-  !self.err || len(self.err) == 0
-}
-
-pub fn error_msg(self: Args) -> text {
-  self.err
-}
-
-pub fn help(self: Args) -> text {
-  h = self.name + " " + self.version + "\n" + self.description + "\n";
-  h += "\nUsage: " + self.name + " [OPTIONS] [ARGS]\n\nOptions:\n";
-  for hp in self.options {
-    h += "  ";
-    if !hp.short_name || len(hp.short_name) == 0 {
-      h += "    ";
+  if a.long_name.len() > 0 { s += "--{a.long_name}"; }
+  if a.kind == ArgKind.Value || a.kind == ArgKind.Optional {
+    sep = if a.long_name.len() > 0 { "=" } else { " " };
+    if a.kind == ArgKind.Optional {
+      s += "[{sep}{a.arg_name}]";
     } else {
-      h += "-" + hp.short_name + ", ";
+      s += "{sep}{a.arg_name}";
     }
-    h += "--" + hp.long_name;
-    if hp.kind == ArgKind.Value {
-      h += " <" + hp.arg_name + ">";
-    }
-    if hp.mandatory { h += " (required)" }
-    h += "\n        " + hp.description + "\n";
   }
+  s
+}
+
+// Word-wrap a description into the help description column, indenting wrapped lines.
+fn wrap_desc(desc: text, indent: integer) -> text {
+  words = desc.split(' ');
+  out = "";
+  line_len = 0;
+  avail = HELP_WIDTH - indent;
+  for w in words {
+    wl = w.len();
+    if line_len == 0 {
+      out += w;
+      line_len = wl;
+    } else if line_len + 1 + wl > avail {
+      out += "\n{spaces(indent)}{w}";
+      line_len = wl;
+    } else {
+      out += " {w}";
+      line_len += 1 + wl;
+    }
+  }
+  out
+}
+
+fn has_mixed_value_option(self: Args) -> boolean {
+  for xo in self.options {
+    if xo.kind != ArgKind.Flag && xo.short_name.len() > 0 && xo.long_name.len() > 0 { return true }
+  }
+  false
+}
+
+// Render a GNU-format help screen from the declared options.
+pub fn help(self: Args) -> text {
+  h = "Usage: {self.name} [OPTION...]";
+  if self.usage.len() > 0 { h += " {self.usage}"; }
+  h += "\n";
+  if self.description.len() > 0 { h += "{self.description}\n"; }
+  h += "\n";
+  for ho in self.options {
+    left = option_left(ho);
+    h += left;
+    if left.len() < HELP_COL {
+      h += spaces(HELP_COL - left.len());
+    } else {
+      h += "\n{spaces(HELP_COL)}";
+    }
+    h += wrap_desc(ho.description, HELP_COL);
+    h += "\n";
+  }
+  if self.has_mixed_value_option() {
+    h += "\nMandatory arguments to long options are mandatory for short options too.\n";
+  }
+  if self.epilog.len() > 0 { h += "\n{self.epilog}\n"; }
+  if self.bug_address.len() > 0 { h += "\nReport bugs to {self.bug_address}.\n"; }
   h
 }
