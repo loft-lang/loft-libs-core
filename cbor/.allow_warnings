@@ -1,0 +1,8 @@
+Temporary warning opt-out for the loft v[i] out-of-bounds lint.
+
+The decode path (src/cbor.loft read_value) indexes bytes[...] only after an
+explicit length guard (e.g. `if pos >= n { return ... }` immediately before
+`bytes[pos]`), so every access is provably in-bounds — the warnings are false
+positives. A clean `?? <fallback>` rewrite is deferred because the fallback's
+type fights native (rustc) codegen on the vector<u8> / integer paths and needs
+care to keep `native == wasm`. Remove this file once that lint pass lands.

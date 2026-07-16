@@ -22,6 +22,7 @@ Per the chunked-repo design in
 | [`arguments/`](arguments/) | `arguments` — CLI argument parsing | v0.1.0 (extracted 2026-05-24) |
 | [`random/`](random/) | `random` — PRNG | v0.1.0 (extracted 2026-05-24, **showcase drain**: the LoftStore-forwarding codegen feature in loft 0.8.5+ ships here as its canonical example) |
 | [`regex/`](regex/) | `regex` — small-script regex (`matches`/`find`/`split`, thread-local cache) | v0.1.0 (added 2026-06-01) |
+| [`cbor/`](cbor/) | `cbor` — canonical CBOR (RFC 8949) encode/decode, pure loft | v0.1.0 (added 2026-06-20, [@PLN83]) |
 
 Future drains from the loft stdlib (Phase 3.6 in
 [plan-12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md#phase-36--stdlib-drain-into-libs))
