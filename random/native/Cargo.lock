@@ -33,10 +33,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91b7969b1cfedfd9c7c44a0793ff6b349f5993cb69ea48fe1bc2868224007808"
 
 [[package]]
+name = "loft-ffi-build"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b9a24793c730783efd818e1e7563dc008b7e1e7eddcd9964e212496e26aa2c7"
+
+[[package]]
 name = "loft-random"
 version = "0.1.0"
 dependencies = [
  "loft-ffi",
+ "loft-ffi-build",
  "rand_core",
  "rand_pcg",
 ]
