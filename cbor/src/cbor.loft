@@ -24,7 +24,7 @@
 pub enum CborValue {
   CNull,
   CBool  { value: boolean },
-  CInt   { value: integer not null },   // >=0 -> major 0 (uint); <0 -> major 1 (negint)
+  CInt   { value: integer },   // >=0 -> major 0 (uint); <0 -> major 1 (negint)
   CBytes { value: vector<u8> },
   CText  { value: text },
   CArray { items: vector<CborValue> },

@@ -41,8 +41,8 @@ pub fn rand_indices(n: integer) -> vector<integer>;
 //   p = r.indices(52);        // a shuffled deck from THIS stream
 
 pub struct RandStream {
-  s1: integer not null,   // Lehmer state A in [1, 2147483562]
-  s2: integer not null,   // Lehmer state B in [1, 2147483398]
+  s1: integer,   // Lehmer state A in [1, 2147483562]
+  s2: integer,   // Lehmer state B in [1, 2147483398]
 }
 
 // Seed an independent stream. Any integer seed is valid (negative and zero included);
