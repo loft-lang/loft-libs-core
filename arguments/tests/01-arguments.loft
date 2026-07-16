@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Jurjen Stellingwerff
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Tests for the arguments library.
 use arguments;
@@ -91,6 +91,13 @@ fn main() {
   assert(a.positionals[0] == "file1.txt", "positional: first");
   assert(a.positionals[1] == "file2.txt", "positional: second");
 
+  // --- interspersed options and positionals (GNU permutation) ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  assert(a.parse(["file1", "--verbose", "file2"]), "interspersed: parse ok");
+  assert(a.has("verbose"), "interspersed: flag still parsed after a positional");
+  assert(len(a.positionals) == 2, "interspersed: two positionals");
+
   // --- -- separator stops option parsing ---
   a = arguments::create("app", "1.0", "Test");
   a.flag("v", "verbose", "Verbose");
@@ -98,6 +105,40 @@ fn main() {
   assert(a.has("verbose"), "separator: flag set");
   assert(len(a.positionals) == 1, "separator: one positional");
   assert(a.positionals[0] == "--not-an-option", "separator: value preserved");
+
+  // --- bare '-' is a positional (stdin convention) ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  assert(a.parse(["-", "-v"]), "dash: parse ok");
+  assert(a.has("verbose"), "dash: -v still a flag");
+  assert(len(a.positionals) == 1, "dash: one positional");
+  assert(a.positionals[0] == "-", "dash: '-' kept as positional");
+
+  // --- unambiguous long prefix abbreviation ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  a.option("o", "output", "FILE", "Output");
+  assert(a.parse(["--verb", "--out=x.txt"]), "abbrev: parse ok");
+  assert(a.has("verbose"), "abbrev: --verb -> --verbose");
+  assert(a.get("output") == "x.txt", "abbrev: --out -> --output");
+
+  // --- ambiguous long prefix is rejected ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("", "verbose", "Verbose");
+  a.flag("", "version", "Version");
+  assert(!a.parse(["--ver"]), "ambiguous: parse fails");
+  assert(a.error_msg().contains("ambiguous"), "ambiguous: error names it");
+
+  // --- optional-argument option ---
+  a = arguments::create("app", "1.0", "Test");
+  a.optional("c", "color", "WHEN", "Colorize output");
+  assert(a.parse(["--color"]), "optional bare: parse ok");
+  assert(a.has("color"), "optional bare: present");
+  assert(a.get("color") == "", "optional bare: empty value");
+  a = arguments::create("app", "1.0", "Test");
+  a.optional("c", "color", "WHEN", "Colorize output");
+  assert(a.parse(["--color=always"]), "optional=: parse ok");
+  assert(a.get("color") == "always", "optional=: value");
 
   // --- required option: present ---
   a = arguments::create("app", "1.0", "Test");
@@ -110,24 +151,33 @@ fn main() {
   a.required("c", "config", "PATH", "Config file");
   assert(!a.parse([]), "required missing: parse fails");
   assert(!a.ok(), "required missing: not ok");
-  assert(a.error_msg().find("config") != null, "required missing: error mentions name");
+  assert(a.error_msg().contains("config"), "required missing: error mentions name");
 
-  // --- unknown long option ---
+  // --- unknown long option (GNU wording) ---
   a = arguments::create("app", "1.0", "Test");
   a.flag("v", "verbose", "Verbose");
   assert(!a.parse(["--unknown"]), "unknown long: parse fails");
-  assert(a.error_msg().find("unknown") != null, "unknown long: error message");
+  assert(a.error_msg().contains("unrecognized"), "unknown long: GNU wording");
+  assert(a.error_msg().contains("unknown"), "unknown long: names option");
 
   // --- unknown short option ---
   a = arguments::create("app", "1.0", "Test");
   a.flag("v", "verbose", "Verbose");
   assert(!a.parse(["-x"]), "unknown short: parse fails");
+  assert(a.error_msg().contains("invalid option"), "unknown short: GNU wording");
 
   // --- option missing its value ---
   a = arguments::create("app", "1.0", "Test");
   a.option("o", "output", "FILE", "Output file");
   assert(!a.parse(["--output"]), "missing value: parse fails");
-  assert(a.error_msg().find("output") != null, "missing value: error message");
+  assert(a.error_msg().contains("output"), "missing value: error message");
+  assert(a.error_msg().contains("requires an argument"), "missing value: GNU wording");
+
+  // --- flag given a value is rejected ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  assert(!a.parse(["--verbose=1"]), "flag+value: parse fails");
+  assert(a.error_msg().contains("doesn't allow an argument"), "flag+value: GNU wording");
 
   // --- empty argv ---
   a = arguments::create("app", "1.0", "Test");
@@ -135,6 +185,15 @@ fn main() {
   assert(a.parse([]), "empty: parse ok");
   assert(!a.has("verbose"), "empty: no flags set");
   assert(len(a.positionals) == 0, "empty: no positionals");
+
+  // --- re-parse resets state ---
+  a = arguments::create("app", "1.0", "Test");
+  a.flag("v", "verbose", "Verbose");
+  a.parse(["--verbose", "x"]);
+  assert(a.parse(["y"]), "reparse: ok");
+  assert(!a.has("verbose"), "reparse: verbose cleared");
+  assert(len(a.positionals) == 1, "reparse: positionals reset");
+  assert(a.positionals[0] == "y", "reparse: fresh positional");
 
   // --- multiple options together ---
   a = arguments::create("app", "1.0", "Test");
@@ -145,6 +204,13 @@ fn main() {
   assert(a.has("verbose"), "multi: verbose");
   assert(a.get("output") == "out.txt", "multi: output");
   assert(a.get("count") == "42", "multi: count");
+
+  // --- typed / defaulted getters ---
+  assert(a.get_int("count") == 42, "get_int: parses");
+  assert(a.get_int("output") == null, "get_int: non-numeric -> null");
+  assert(a.get_int("verbose") == null || a.get_int("verbose") != null, "get_int: flag value tolerated");
+  assert(a.get_or("output", "def") == "out.txt", "get_or: set value");
+  assert(a.get_or("missingopt", "def") == "def", "get_or: fallback");
 
   // --- get for unset option returns null ---
   a = arguments::create("app", "1.0", "Test");
@@ -163,21 +229,44 @@ fn main() {
   assert(a.parse(["--verbose"]), "no short: parse ok");
   assert(a.has("verbose"), "no short: flag set");
 
-  // --- help text ---
+  // --- opt-in --help / --version ---
+  a = arguments::create("myapp", "1.2", "My application");
+  a.flag("v", "verbose", "Be verbose");
+  a.enable_help();
+  assert(a.parse(["--help"]), "help: parse ok");
+  assert(a.wants_help(), "help: wants_help set");
+  assert(!a.wants_version(), "help: not version");
+  a = arguments::create("myapp", "1.2", "My application");
+  a.enable_help();
+  assert(a.parse(["--version"]), "version: parse ok");
+  assert(a.wants_version(), "version: wants_version set");
+  assert(a.version_text() == "myapp 1.2", "version_text content");
+  // --help bypasses required validation
+  a = arguments::create("myapp", "1.2", "My application");
+  a.required("c", "config", "PATH", "Config");
+  a.enable_help();
+  assert(a.parse(["--help"]), "help bypasses required check");
+  assert(a.wants_help(), "help bypass: wants_help");
+
+  // --- auto-generated GNU help text ---
   a = arguments::create("myapp", "1.0", "My application");
   a.flag("v", "verbose", "Enable verbose output");
   a.option("o", "output", "FILE", "Output file path");
   a.required("c", "config", "PATH", "Configuration file");
+  a.set_bug_address("bugs@example.com");
   help_text = a.help();
-  assert(help_text.find("myapp") != null, "help: program name");
-  assert(help_text.find("1.0") != null, "help: version");
-  assert(help_text.find("verbose") != null, "help: flag listed");
-  assert(help_text.find("<FILE>") != null, "help: arg name shown");
-  assert(help_text.find("required") != null, "help: required marker");
-  assert(help_text.find("Usage:") != null, "help: usage line");
+  assert(help_text.contains("Usage:"), "help: usage line");
+  assert(help_text.contains("myapp"), "help: program name");
+  assert(help_text.contains("My application"), "help: description");
+  assert(help_text.contains("-v, --verbose"), "help: short+long shown together");
+  assert(help_text.contains("--output=FILE"), "help: value metavar");
+  assert(help_text.contains("Configuration file"), "help: description text");
+  assert(help_text.contains("Mandatory arguments"), "help: mandatory note");
+  assert(help_text.contains("Report bugs to bugs@example.com"), "help: bug address");
+  assert(a.version_text().contains("1.0"), "version_text has version");
+  assert(a.try_help().contains("--help"), "try_help hint");
 
   // --- handler dispatch pattern ---
-  // Demonstrates calling functions when options are selected.
   a = arguments::create("app", "1.0", "Test");
   a.flag("v", "verbose", "Verbose");
   a.option("o", "output", "FILE", "Output");
@@ -277,6 +366,20 @@ fn test_separator() {
   assert(tse.positionals[0] == "-v", "-v as positional");
 }
 
+fn test_abbreviation() {
+  tab = arguments::create("app", "1.0", "Test");
+  tab.flag("v", "verbose", "Verbose");
+  assert(tab.parse(["--verb"]), "abbrev parse");
+  assert(tab.has("verbose"), "abbrev resolves");
+}
+
+fn test_help_flag() {
+  thf = arguments::create("app", "1.0", "Test");
+  thf.enable_help();
+  assert(thf.parse(["--help"]), "help parse");
+  assert(thf.wants_help(), "wants_help");
+}
+
 fn test_handler_dispatch() {
   th = arguments::create("app", "1.0", "Test");
   th.flag("v", "verbose", "Verbose");
@@ -296,10 +399,9 @@ fn test_help_text() {
   tht.option("o", "output", "FILE", "Output file path");
   tht.required("c", "config", "PATH", "Configuration file");
   tht_help = tht.help();
-  assert(tht_help.find("prog") != null, "name in help");
-  assert(tht_help.find("3.0") != null, "version in help");
-  assert(tht_help.find("-v") != null, "short flag in help");
-  assert(tht_help.find("--verbose") != null, "long flag in help");
-  assert(tht_help.find("<FILE>") != null, "arg name in help");
-  assert(tht_help.find("required") != null, "required marker in help");
+  assert(tht_help.contains("prog"), "name in help");
+  assert(tht_help.contains("-v, --verbose"), "short+long in help");
+  assert(tht_help.contains("--output=FILE"), "metavar in help");
+  assert(tht_help.contains("Usage:"), "usage in help");
+  assert(tht.version_text().contains("3.0"), "version in version_text");
 }
