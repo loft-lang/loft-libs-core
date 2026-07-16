@@ -58,8 +58,10 @@ pub fn seed_stream(seed: integer) -> RandStream {
 }
 
 // A random integer in [lo, hi] (inclusive) from THIS stream, advancing it.
-// Returns null when lo > hi (the same contract as the global rand()).
-pub fn get(self: RandStream, lo: integer, hi: integer) -> integer {
+// Returns null when lo > hi (the same contract as the global rand()).  The return
+// type is `integer?` so that documented null contract is honest — callers that pass
+// a valid range read a plain integer; the invalid-range null is opt-in via `?? d`.
+pub fn get(self: RandStream, lo: integer, hi: integer) -> integer? {
   if lo > hi { return null; }
   // L'Ecuyer combined LCG, Schrage's method (all products < 2^31 * 40692 — trap-safe)
   k1 = self.s1 / 53668 ?? 0;
