@@ -33,8 +33,8 @@ pub enum CborValue {
 
 /// One key/value pair of a `CMap`.
 pub struct CborEntry {
-  key: CborValue,
-  value: CborValue,
+  const key: CborValue,
+  const value: CborValue,
 }
 
 // Canonical head: the major type (0..7) plus the SHORTEST-form encoding of
@@ -143,9 +143,9 @@ pub fn encode(v: CborValue) -> vector<u8> {
 /// truncated input.  Decoding never crashes (loft-safe): a bad byte stream
 /// yields ok=false rather than a trap.
 pub struct Decoded {
-  value: CborValue,
-  next:  integer,
-  ok:    boolean,
+  const value: CborValue,
+  const next:  integer,
+  const ok:    boolean,
 }
 
 // Decode one CBOR value starting at `pos`.  Recursive: arrays/maps thread the
