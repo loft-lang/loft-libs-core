@@ -42,30 +42,30 @@ pub struct CborEntry {
 fn head(major: integer, arg: integer) -> vector<u8> {
   buf: vector<u8> = [];
   if arg < 24 {
-    buf += [(major * 32 + arg) as u8];
+    buf += [((major * 32 + arg) & 255) as u8];
   } else if arg < 256 {
-    buf += [(major * 32 + 24) as u8];
-    buf += [arg as u8];
+    buf += [((major * 32 + 24) & 255) as u8];
+    buf += [(arg & 255) as u8];
   } else if arg < 65536 {
-    buf += [(major * 32 + 25) as u8];
-    buf += [(arg / 256) as u8];
-    buf += [(arg % 256) as u8];
+    buf += [((major * 32 + 25) & 255) as u8];
+    buf += [((arg / 256) & 255) as u8];
+    buf += [((arg % 256) & 255) as u8];
   } else if arg < 4294967296 {
-    buf += [(major * 32 + 26) as u8];
-    buf += [(arg / 16777216 % 256) as u8];
-    buf += [(arg / 65536 % 256) as u8];
-    buf += [(arg / 256 % 256) as u8];
-    buf += [(arg % 256) as u8];
+    buf += [((major * 32 + 26) & 255) as u8];
+    buf += [((arg / 16777216 % 256) & 255) as u8];
+    buf += [((arg / 65536 % 256) & 255) as u8];
+    buf += [((arg / 256 % 256) & 255) as u8];
+    buf += [((arg % 256) & 255) as u8];
   } else {
-    buf += [(major * 32 + 27) as u8];
-    buf += [(arg / 72057594037927936 % 256) as u8];
-    buf += [(arg / 281474976710656 % 256) as u8];
-    buf += [(arg / 1099511627776 % 256) as u8];
-    buf += [(arg / 4294967296 % 256) as u8];
-    buf += [(arg / 16777216 % 256) as u8];
-    buf += [(arg / 65536 % 256) as u8];
-    buf += [(arg / 256 % 256) as u8];
-    buf += [(arg % 256) as u8];
+    buf += [((major * 32 + 27) & 255) as u8];
+    buf += [((arg / 72057594037927936 % 256) & 255) as u8];
+    buf += [((arg / 281474976710656 % 256) & 255) as u8];
+    buf += [((arg / 1099511627776 % 256) & 255) as u8];
+    buf += [((arg / 4294967296 % 256) & 255) as u8];
+    buf += [((arg / 16777216 % 256) & 255) as u8];
+    buf += [((arg / 65536 % 256) & 255) as u8];
+    buf += [((arg / 256 % 256) & 255) as u8];
+    buf += [((arg % 256) & 255) as u8];
   }
   return buf;
 }
@@ -124,7 +124,7 @@ pub fn encode(v: CborValue) -> vector<u8> {
     CText { value } => {
       n = len(value);
       buf = head(3, n);
-      for i in 0..n { buf += [value.byte_at(i) as u8]; }
+      for i in 0..n { buf += [(value.byte_at(i) & 255) as u8]; }
       buf
     },
     CArray { items } => {
@@ -154,7 +154,10 @@ pub struct Decoded {
 fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
   n = len(bytes);
   if pos >= n { return Decoded { value: CNull, next: pos, ok: false }; }
-  b = bytes[pos];
+  // Every `bytes[…]` read below is already bounds-guarded (the `>= n` checks set
+  // `argok = false`), so `?? 0` only discharges the nullable-index type the current
+  // loft gives `bytes[i]` (@PLN25) — the default is never actually reached.
+  b = bytes[pos] ?? 0;
   major = b / 32;
   info = b % 32;
   // --- argument (length / integer payload), canonical shortest-form ---
@@ -165,23 +168,23 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
     arg = info;
   } else if info == 24 {
     if argpos >= n { argok = false; }
-    else { arg = bytes[argpos]; argpos = argpos + 1; if arg < 24 { argok = false; } }
+    else { arg = bytes[argpos] ?? 0; argpos = argpos + 1; if arg < 24 { argok = false; } }
   } else if info == 25 {
     if argpos + 1 >= n { argok = false; }
-    else { arg = bytes[argpos] * 256 + bytes[argpos + 1]; argpos = argpos + 2; if arg < 256 { argok = false; } }
+    else { arg = (bytes[argpos] ?? 0) * 256 + (bytes[argpos + 1] ?? 0); argpos = argpos + 2; if arg < 256 { argok = false; } }
   } else if info == 26 {
     if argpos + 3 >= n { argok = false; }
     else {
-      arg = ((bytes[argpos] * 256 + bytes[argpos + 1]) * 256 + bytes[argpos + 2]) * 256 + bytes[argpos + 3];
+      arg = (((bytes[argpos] ?? 0) * 256 + (bytes[argpos + 1] ?? 0)) * 256 + (bytes[argpos + 2] ?? 0)) * 256 + (bytes[argpos + 3] ?? 0);
       argpos = argpos + 4;
       if arg < 65536 { argok = false; }
     }
   } else if info == 27 {
     if argpos + 7 >= n { argok = false; }
-    else if bytes[argpos] >= 128 { argok = false; }   // exceeds i64 range
+    else if (bytes[argpos] ?? 0) >= 128 { argok = false; }   // exceeds i64 range
     else {
-      arg = bytes[argpos];
-      for k in 1..8 { arg = arg * 256 + bytes[argpos + k]; }
+      arg = bytes[argpos] ?? 0;
+      for k in 1..8 { arg = arg * 256 + (bytes[argpos + k] ?? 0); }
       argpos = argpos + 8;
       if arg < 4294967296 { argok = false; }
     }
@@ -195,13 +198,13 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
   if major == 2 {
     if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
     bs: vector<u8> = [];
-    for k in 0..arg { bs += [bytes[argpos + k]]; }
+    for k in 0..arg { bs += [bytes[argpos + k] ?? 0]; }
     return Decoded { value: CBytes { value: bs }, next: argpos + arg, ok: true };
   }
   if major == 3 {
     if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
     tb: vector<u8> = [];
-    for k in 0..arg { tb += [bytes[argpos + k]]; }
+    for k in 0..arg { tb += [bytes[argpos + k] ?? 0]; }
     return Decoded { value: CText { value: text_from_bytes(tb) }, next: argpos + arg, ok: true };
   }
   if major == 4 {
