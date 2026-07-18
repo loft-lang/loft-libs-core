@@ -110,13 +110,13 @@ fn main() {
   a.required("c", "config", "PATH", "Config file");
   assert(!a.parse([]), "required missing: parse fails");
   assert(!a.ok(), "required missing: not ok");
-  assert(a.error_msg().contains("config"), "required missing: error mentions name");
+  assert(a.error_msg().find("config") != null, "required missing: error mentions name");
 
   // --- unknown long option ---
   a = arguments::create("app", "1.0", "Test");
   a.flag("v", "verbose", "Verbose");
   assert(!a.parse(["--unknown"]), "unknown long: parse fails");
-  assert(a.error_msg().contains("unknown"), "unknown long: error message");
+  assert(a.error_msg().find("unknown") != null, "unknown long: error message");
 
   // --- unknown short option ---
   a = arguments::create("app", "1.0", "Test");
@@ -127,7 +127,7 @@ fn main() {
   a = arguments::create("app", "1.0", "Test");
   a.option("o", "output", "FILE", "Output file");
   assert(!a.parse(["--output"]), "missing value: parse fails");
-  assert(a.error_msg().contains("output"), "missing value: error message");
+  assert(a.error_msg().find("output") != null, "missing value: error message");
 
   // --- empty argv ---
   a = arguments::create("app", "1.0", "Test");
@@ -169,12 +169,12 @@ fn main() {
   a.option("o", "output", "FILE", "Output file path");
   a.required("c", "config", "PATH", "Configuration file");
   help_text = a.help();
-  assert(help_text.contains("myapp"), "help: program name");
-  assert(help_text.contains("1.0"), "help: version");
-  assert(help_text.contains("verbose"), "help: flag listed");
-  assert(help_text.contains("<FILE>"), "help: arg name shown");
-  assert(help_text.contains("required"), "help: required marker");
-  assert(help_text.contains("Usage:"), "help: usage line");
+  assert(help_text.find("myapp") != null, "help: program name");
+  assert(help_text.find("1.0") != null, "help: version");
+  assert(help_text.find("verbose") != null, "help: flag listed");
+  assert(help_text.find("<FILE>") != null, "help: arg name shown");
+  assert(help_text.find("required") != null, "help: required marker");
+  assert(help_text.find("Usage:") != null, "help: usage line");
 
   // --- handler dispatch pattern ---
   // Demonstrates calling functions when options are selected.
@@ -186,9 +186,9 @@ fn main() {
   v_result = "";
   o_result = "";
   n_result = "";
-  if a.has("verbose") { v_result = on_verbose(a.get("verbose")); }
-  if a.has("output") { o_result = on_output(a.get("output")); }
-  if a.has("count") { n_result = on_count(a.get("count")); }
+  if a.has("verbose") { v_result = on_verbose(a.get("verbose") ?? ""); }
+  if a.has("output") { o_result = on_output(a.get("output") ?? ""); }
+  if a.has("count") { n_result = on_count(a.get("count") ?? ""); }
   assert(v_result == "verbose_activated", "handler: verbose called");
   assert(o_result == "output:report.txt", "handler: output called");
   assert(n_result == "count:5", "handler: count called");
@@ -200,8 +200,8 @@ fn main() {
   a.parse(["--verbose"]);
   skip_v = "";
   skip_o = "";
-  if a.has("verbose") { skip_v = on_verbose(a.get("verbose")); }
-  if a.has("output") { skip_o = on_output(a.get("output")); }
+  if a.has("verbose") { skip_v = on_verbose(a.get("verbose") ?? ""); }
+  if a.has("output") { skip_o = on_output(a.get("output") ?? ""); }
   assert(skip_v == "verbose_activated", "skip handler: verbose called");
   assert(skip_o == "", "skip handler: output NOT called");
 
@@ -284,8 +284,8 @@ fn test_handler_dispatch() {
   th.parse(["--verbose", "-o", "out.txt"]);
   th_v = "";
   th_o = "";
-  if th.has("verbose") { th_v = on_verbose(th.get("verbose")); }
-  if th.has("output") { th_o = on_output(th.get("output")); }
+  if th.has("verbose") { th_v = on_verbose(th.get("verbose") ?? ""); }
+  if th.has("output") { th_o = on_output(th.get("output") ?? ""); }
   assert(th_v == "verbose_activated", "verbose handler called");
   assert(th_o == "output:out.txt", "output handler called");
 }
@@ -296,10 +296,10 @@ fn test_help_text() {
   tht.option("o", "output", "FILE", "Output file path");
   tht.required("c", "config", "PATH", "Configuration file");
   tht_help = tht.help();
-  assert(tht_help.contains("prog"), "name in help");
-  assert(tht_help.contains("3.0"), "version in help");
-  assert(tht_help.contains("-v"), "short flag in help");
-  assert(tht_help.contains("--verbose"), "long flag in help");
-  assert(tht_help.contains("<FILE>"), "arg name in help");
-  assert(tht_help.contains("required"), "required marker in help");
+  assert(tht_help.find("prog") != null, "name in help");
+  assert(tht_help.find("3.0") != null, "version in help");
+  assert(tht_help.find("-v") != null, "short flag in help");
+  assert(tht_help.find("--verbose") != null, "long flag in help");
+  assert(tht_help.find("<FILE>") != null, "arg name in help");
+  assert(tht_help.find("required") != null, "required marker in help");
 }

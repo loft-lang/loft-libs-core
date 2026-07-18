@@ -377,8 +377,8 @@ fn key_schedule_base(shared_secret_b64: text, info_b64: text) -> (text, text) {
 // The result of `hpke_seal_base`: the KEM-encapsulated key `enc` and the AEAD
 // `ciphertext` (ciphertext||16-byte-tag), both base64.
 pub struct HpkeSealed {
-  enc: text not null,
-  ciphertext: text not null,
+  enc: text,
+  ciphertext: text,
 }
 
 // Internal: seal with an already-encapsulated (shared_secret, enc).  seq = 0,
