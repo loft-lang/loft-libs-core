@@ -10,10 +10,10 @@ fn main() {
   // ...and the free form (subject-first, via `both`)
   assert(regex::matches("abc123", "[0-9]+"), "free matches(input, pattern)");
 
-  // --- find: free fn (pattern-first) AND regex_find method (subject-first) ---
-  assert(regex::find("[0-9]+", "abc123") == 3, "free find -> offset 3");
-  assert("abc123".regex_find("[0-9]+") == 3, "method regex_find -> offset 3");
-  assert(!"abcdef".regex_find("[0-9]+"), "regex_find no match -> null");
+  // --- find: free fn (pattern-first) AND search method (subject-first) ---
+  assert("abc123".search("[0-9]+") == 3, "search -> offset 3");
+  assert("abc123".search("[0-9]+") == 3, "method search -> offset 3");
+  assert(!"abcdef".search("[0-9]+"), "search no match -> null");
 
   // --- anchored pattern ---
   assert("foobar".matches("^foo"), "^foo matches foobar");
@@ -21,7 +21,7 @@ fn main() {
 
   // --- invalid pattern fails safely (no raise) ---
   assert(!"anything".matches("[unclosed"), "invalid pattern -> false");
-  assert(!"anything".regex_find("("), "invalid pattern -> null");
+  assert(!"anything".search("("), "invalid pattern -> null");
 
   // --- cache: many repeated calls with the same pattern stay correct ---
   ok = true;
@@ -35,19 +35,19 @@ fn main() {
   // --- split: free fn (pattern-first) ---
   parts = "";
   count = 0;
-  for piece in regex::split("[,;]", "a,b;c") {
+  for piece in "a,b;c".split_on("[,;]") {
     parts = "{parts}{piece}|";
     count = count + 1;
   }
-  assert(count == 3, "free split -> 3 pieces (got {count})");
-  assert(parts == "a|b|c|", "free split pieces = a|b|c| (got {parts})");
+  assert(count == 3, "split_on -> 3 pieces (got {count})");
+  assert(parts == "a|b|c|", "split_on pieces = a|b|c| (got {parts})");
 
-  // --- split: regex_split method (subject-first) ---
+  // --- split: split_on method (subject-first) ---
   mparts = "";
-  for piece in "x,y,z".regex_split(",") {
+  for piece in "x,y,z".split_on(",") {
     mparts = "{mparts}{piece}.";
   }
-  assert(mparts == "x.y.z.", "method regex_split pieces (got {mparts})");
+  assert(mparts == "x.y.z.", "method split_on pieces (got {mparts})");
 }
 
 fn test_matches_method() {
@@ -55,15 +55,15 @@ fn test_matches_method() {
   assert(!"xyz".matches("[0-9]+"), "no digits");
 }
 
-fn test_regex_find_method() {
-  assert("hello world".regex_find("world") == 6, "world at offset 6");
-  assert(!"hello there".regex_find("world"), "no world -> null");
+fn test_search_method() {
+  assert("hello world".search("world") == 6, "world at offset 6");
+  assert(!"hello there".search("world"), "no world -> null");
 }
 
-fn test_regex_split_method() {
+fn test_split_on_method() {
   out = "";
   n = 0;
-  for p in "one  two   three".regex_split(" +") {
+  for p in "one  two   three".split_on(" +") {
     out = "{out}{p}.";
     n = n + 1;
   }
@@ -73,16 +73,16 @@ fn test_regex_split_method() {
 
 fn test_free_functions() {
   // the pattern-first free forms still work
-  assert(regex::find("[0-9]+", "abc123") == 3, "free find");
+  assert("abc123".search("[0-9]+") == 3, "search");
   assert(regex::matches("abc123", "[0-9]+"), "free matches subject-first");
   c = 0;
-  for _p in regex::split(",", "a,b") {
+  for _p in "a,b".split_on(",") {
     c = c + 1;
   }
-  assert(c == 2, "free split count");
+  assert(c == 2, "split_on count");
 }
 
 fn test_invalid_pattern_safe() {
   assert(!"x".matches("("), "invalid -> no match");
-  assert(!"x".regex_find("["), "invalid -> null find");
+  assert(!"x".search("["), "invalid -> null find");
 }
