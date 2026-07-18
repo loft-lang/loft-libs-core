@@ -127,7 +127,7 @@ fn main() {
   a.flag("", "verbose", "Verbose");
   a.flag("", "version", "Version");
   assert(!a.parse(["--ver"]), "ambiguous: parse fails");
-  assert(a.error_msg().contains("ambiguous"), "ambiguous: error names it");
+  assert(a.error_msg().find("ambiguous") != null, "ambiguous: error names it");
 
   // --- optional-argument option ---
   a = arguments::create("app", "1.0", "Test");
@@ -151,33 +151,33 @@ fn main() {
   a.required("c", "config", "PATH", "Config file");
   assert(!a.parse([]), "required missing: parse fails");
   assert(!a.ok(), "required missing: not ok");
-  assert(a.error_msg().contains("config"), "required missing: error mentions name");
+  assert(a.error_msg().find("config") != null, "required missing: error mentions name");
 
   // --- unknown long option (GNU wording) ---
   a = arguments::create("app", "1.0", "Test");
   a.flag("v", "verbose", "Verbose");
   assert(!a.parse(["--unknown"]), "unknown long: parse fails");
-  assert(a.error_msg().contains("unrecognized"), "unknown long: GNU wording");
-  assert(a.error_msg().contains("unknown"), "unknown long: names option");
+  assert(a.error_msg().find("unrecognized") != null, "unknown long: GNU wording");
+  assert(a.error_msg().find("unknown") != null, "unknown long: names option");
 
   // --- unknown short option ---
   a = arguments::create("app", "1.0", "Test");
   a.flag("v", "verbose", "Verbose");
   assert(!a.parse(["-x"]), "unknown short: parse fails");
-  assert(a.error_msg().contains("invalid option"), "unknown short: GNU wording");
+  assert(a.error_msg().find("invalid option") != null, "unknown short: GNU wording");
 
   // --- option missing its value ---
   a = arguments::create("app", "1.0", "Test");
   a.option("o", "output", "FILE", "Output file");
   assert(!a.parse(["--output"]), "missing value: parse fails");
-  assert(a.error_msg().contains("output"), "missing value: error message");
-  assert(a.error_msg().contains("requires an argument"), "missing value: GNU wording");
+  assert(a.error_msg().find("output") != null, "missing value: error message");
+  assert(a.error_msg().find("requires an argument") != null, "missing value: GNU wording");
 
   // --- flag given a value is rejected ---
   a = arguments::create("app", "1.0", "Test");
   a.flag("v", "verbose", "Verbose");
   assert(!a.parse(["--verbose=1"]), "flag+value: parse fails");
-  assert(a.error_msg().contains("doesn't allow an argument"), "flag+value: GNU wording");
+  assert(a.error_msg().find("doesn't allow an argument") != null, "flag+value: GNU wording");
 
   // --- empty argv ---
   a = arguments::create("app", "1.0", "Test");
@@ -255,16 +255,16 @@ fn main() {
   a.required("c", "config", "PATH", "Configuration file");
   a.set_bug_address("bugs@example.com");
   help_text = a.help();
-  assert(help_text.contains("Usage:"), "help: usage line");
-  assert(help_text.contains("myapp"), "help: program name");
-  assert(help_text.contains("My application"), "help: description");
-  assert(help_text.contains("-v, --verbose"), "help: short+long shown together");
-  assert(help_text.contains("--output=FILE"), "help: value metavar");
-  assert(help_text.contains("Configuration file"), "help: description text");
-  assert(help_text.contains("Mandatory arguments"), "help: mandatory note");
-  assert(help_text.contains("Report bugs to bugs@example.com"), "help: bug address");
-  assert(a.version_text().contains("1.0"), "version_text has version");
-  assert(a.try_help().contains("--help"), "try_help hint");
+  assert(help_text.find("Usage:") != null, "help: usage line");
+  assert(help_text.find("myapp") != null, "help: program name");
+  assert(help_text.find("My application") != null, "help: description");
+  assert(help_text.find("-v, --verbose") != null, "help: short+long shown together");
+  assert(help_text.find("--output=FILE") != null, "help: value metavar");
+  assert(help_text.find("Configuration file") != null, "help: description text");
+  assert(help_text.find("Mandatory arguments") != null, "help: mandatory note");
+  assert(help_text.find("Report bugs to bugs@example.com") != null, "help: bug address");
+  assert(a.version_text().find("1.0") != null, "version_text has version");
+  assert(a.try_help().find("--help") != null, "try_help hint");
 
   // --- handler dispatch pattern ---
   a = arguments::create("app", "1.0", "Test");
@@ -399,9 +399,9 @@ fn test_help_text() {
   tht.option("o", "output", "FILE", "Output file path");
   tht.required("c", "config", "PATH", "Configuration file");
   tht_help = tht.help();
-  assert(tht_help.contains("prog"), "name in help");
-  assert(tht_help.contains("-v, --verbose"), "short+long in help");
-  assert(tht_help.contains("--output=FILE"), "metavar in help");
-  assert(tht_help.contains("Usage:"), "usage in help");
-  assert(tht.version_text().contains("3.0"), "version in version_text");
+  assert(tht_help.find("prog") != null, "name in help");
+  assert(tht_help.find("-v, --verbose") != null, "short+long in help");
+  assert(tht_help.find("--output=FILE") != null, "metavar in help");
+  assert(tht_help.find("Usage:") != null, "usage in help");
+  assert(tht.version_text().find("3.0") != null, "version in version_text");
 }
