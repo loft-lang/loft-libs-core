@@ -10,14 +10,18 @@
 // recursion — is NOT this library's job; that is the match-pattern parser
 // framework (jjstwerff/loft `plans/.../26-match-peg`).
 //
-// Two call styles, same operations:
-//   * free functions, pattern-first:  regex::find("[0-9]+", line)
-//   * text methods, subject-first:     line.regex_find("[0-9]+")
-// Method names: `matches` keeps its bare name (collision-free on text);
-// `find`/`split` wear a `regex_` prefix as methods because the bare names
-// collide with stdlib `text.find` / `text.split` (literal operations).
+// The public API is subject-first text methods, named with the conventional
+// regex verbs so they read naturally on a `text`:
+//   * line.search("[0-9]+")     -> byte offset of the first match, or null
+//   * line.matches("[0-9]+")    -> true if the pattern matches anywhere
+//   * for f in line.split_on("[,;]") { … }   -> lazy split on the pattern
+// The verbs dodge the stdlib literal-text methods deliberately: bare `find`
+// and `split` on `text` are already the stdlib's *literal* substring-find and
+// character-split (C95 blocks reusing either name, even as an overload), so
+// regex uses `search` (cf. JS `String.search`, Python `re.search`) and
+// `split_on`.  `matches` is collision-free and keeps its bare name.
 //
-// Phase 0: matches, find, split.  match_groups / replace are the next
+// Phase 0: matches, search, split_on.  match_groups / replace are the next
 // increment (capture-group spans + 3-arg-text returns).
 
 // --- Internal natives (bridge to the Rust `regex` crate) ---
@@ -36,21 +40,14 @@ fn match_start(pattern: text, input: text) -> integer;
 fn match_end(pattern: text, input: text) -> integer;
 #native
 
-// --- Public free functions (pattern-first, namespaced as `regex::`) ---
-
-// Byte offset of the first match of `pattern` in `input`, or null when
-// there is no match (or the pattern is invalid).
-pub fn find(pattern: text, input: text) -> integer {
-  match_start(pattern, input)
-}
-
-// (internal) The split loop.  Distinct name so unqualified calls inside
-// this module resolve here, not to stdlib `text.split` (character
-// separator).  Yields each piece lazily; regex byte offsets line up with
-// loft's byte-indexed text slicing.
+// (internal) The split loop.  Distinct name so unqualified calls inside this
+// module resolve here, not to stdlib `text.split` (character separator).
+// Yields each piece lazily; regex byte offsets line up with loft's
+// byte-indexed text slicing — so the running bound is `size()` (bytes), not
+// `len()` (characters).
 fn split_iter(pattern: text, input: text) -> iterator<text> {
   pos = 0;
-  n = input.len();
+  n = input.size();
   while true {
     rest = input[pos..n];
     s = match_start(pattern, rest);
@@ -67,33 +64,55 @@ fn split_iter(pattern: text, input: text) -> iterator<text> {
   }
 }
 
-// Split `input` on matches of `pattern`, yielding each piece lazily through
-// an `iterator<text>` (reuses loft's coroutine channel — nothing is
-// materialised).
-pub fn split(pattern: text, input: text) -> iterator<text> {
-  yield from split_iter(pattern, input);
-}
+// --- Public API: subject-first text methods (call as line.verb(pattern)) ---
 
-// --- Text methods (subject-first; call as  line.method(pattern) ) ---
+// Byte offset of the first match of `pattern` in the text, or null when there
+// is no match (or the pattern is invalid).  The conventional regex-search verb
+// — named `search`, not `find`, because bare `find` on text is the stdlib's
+// literal substring search.  Call as  line.search("[0-9]+").
+pub fn search(self: text, pattern: text) -> integer {
+  match_start(pattern, self)
+}
 
 // True if `pattern` matches anywhere in the text.  `both` registers this as
 // BOTH a method (`line.matches(p)`) and a free function (`matches(line, p)`).
-// `matches` keeps the bare name — it is collision-free on `text` (the stdlib
-// has `contains`, not `matches`) and reads as regex on its own.
+// Collision-free on `text` (the stdlib has `contains`, not `matches`).
 pub fn matches(both: text, pattern: text) -> boolean {
   is_match(pattern, both)
 }
 
-// Byte offset of the first match of `pattern` in the text, or null.
-// Prefixed because bare `find` collides with stdlib `text.find` (literal
-// substring search).  Call as  line.regex_find("[0-9]+").
-pub fn regex_find(self: text, pattern: text) -> integer {
-  match_start(pattern, self)
-}
-
-// Split the text on matches of `pattern`, yielding pieces lazily.  Prefixed
-// because bare `split` collides with stdlib `text.split` (character
-// separator).  Call as  for piece in line.regex_split("[,;]") { }.
-pub fn regex_split(self: text, pattern: text) -> iterator<text> {
+// Split the text on matches of `pattern`, yielding each piece lazily through
+// an `iterator<text>` (reuses loft's coroutine channel — nothing is
+// materialised).  Named `split_on`, not `split`, because bare `split` on text
+// is the stdlib character-separator split.  Call as
+//   for piece in line.split_on("[,;]") { }.
+pub fn split_on(self: text, pattern: text) -> iterator<text> {
   yield from split_iter(pattern, self);
 }
+
+// --- Superseded spellings (kept working; steered to the clean verbs) ---
+// An earlier release shipped these two extra call styles: a pattern-first free
+// function (`regex::find` / `regex::split`) and a `regex_`-prefixed method
+// (`line.regex_find` / `line.regex_split`).  Both still work unchanged; the
+// recommended-idiom channel (@PLN102 arc C) steers new calls to `search` /
+// `split_on` so the surface converges on one clean spelling per operation.
+
+pub fn find(pattern: text, input: text) -> integer {
+  input.search(pattern)
+}
+#superseded "search"
+
+pub fn split(pattern: text, input: text) -> iterator<text> {
+  yield from input.split_on(pattern);
+}
+#superseded "split_on"
+
+pub fn regex_find(self: text, pattern: text) -> integer {
+  self.search(pattern)
+}
+#superseded "search"
+
+pub fn regex_split(self: text, pattern: text) -> iterator<text> {
+  yield from self.split_on(pattern);
+}
+#superseded "split_on"
