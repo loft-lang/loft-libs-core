@@ -35,3 +35,12 @@ getrandom = "0.2"
 
 [build-dependencies]
 loft-ffi-build = "0.2"
+
+# Local override: build against loft2's in-tree loft-ffi crates so the cdylib's
+# ABI fingerprint matches this loft binary (the published loft-ffi 0.1 on
+# crates.io is older than loft2's bridge-migration loft-ffi). Mirrors the
+# imaging fixture's pattern. Local-only — not for upstream commit.
+[patch.crates-io]
+loft-ffi       = { path = "/home/jurjens/workspace/loft2/loft-ffi" }
+loft-ffi-macros = { path = "/home/jurjens/workspace/loft2/loft-ffi-macros" }
+loft-ffi-build = { path = "/home/jurjens/workspace/loft2/loft-ffi-build" }
