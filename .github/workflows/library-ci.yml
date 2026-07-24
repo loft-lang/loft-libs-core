@@ -37,6 +37,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A machine-local `[patch.crates-io]` with absolute paths was once committed to
+      # crypto/native/Cargo.toml.  It built green on the machine that had those paths and
+      # was unbuildable everywhere else — including in a published tarball.  Cheap to
+      # catch, expensive to ship, so check it before spending 2 minutes building loft.
+      - name: Guard — no absolute paths in committed manifests
+        working-directory: ${{ matrix.package }}
+        run: |
+          if grep -rn -E '"/(home|Users|root)/' --include='*.toml' . ; then
+            echo "::error::${{ matrix.package }}: absolute local path in a committed manifest — a local override must not be committed (it breaks every other host and any published tarball)"
+            exit 1
+          fi
+          echo "no absolute paths in ${{ matrix.package }} manifests"
+
       - name: Install mold (loft's pinned linker)
         run: sudo apt-get update -y && sudo apt-get install -y mold
 
