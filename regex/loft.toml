@@ -3,6 +3,8 @@ name = "regex"
 version = "0.2.1"
 loft = ">=0.8"
 
+api_compatible_with  = "0.2.1"   # oldest own release this is a drop-in for
+data_compatible_with = "0.2.1"   # oldest own release whose stored data this reads
 [library]
 entry = "src/regex.loft"
 native = "loft_regex"
