@@ -49,6 +49,12 @@ n_hkdf_expand = "crypto_hkdf_expand"
 n_ed25519_public_key = "crypto_ed25519_public_key"
 n_ed25519_sign = "crypto_ed25519_sign"
 n_ed25519_verify = "crypto_ed25519_verify"
+# ES256 (ECDSA P-256) — sign/verify/public_key are deterministic (shared es256.rs,
+# native == wasm by construction); keygen reuses the random_fill host import.
+n_ecdsa_p256_keygen = "crypto_ecdsa_p256_keygen"
+n_ecdsa_p256_public_key = "crypto_ecdsa_p256_public_key"
+n_ecdsa_p256_sign = "crypto_ecdsa_p256_sign"
+n_ecdsa_p256_verify = "crypto_ecdsa_p256_verify"
 n_x25519_dh = "crypto_x25519_dh"
 n_aes256gcm_seal = "crypto_aes256gcm_seal"
 n_aes256gcm_open = "crypto_aes256gcm_open"

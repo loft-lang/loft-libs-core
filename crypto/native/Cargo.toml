@@ -33,5 +33,11 @@ aes-gcm = { version = "0.10", default-features = false, features = ["aes", "allo
 # OS CSPRNG for `random_bytes` — reads getrandom(2) / /dev/urandom etc.
 getrandom = "0.2"
 
+# ES256 (ECDSA over NIST P-256 with SHA-256) — JOSE/ACME account keys + CSR signing. Pure-Rust
+# RustCrypto, same no-C-toolchain constraint as the rest. Deterministic RFC 6979 nonces (the
+# `ecdsa` default), so signing needs no RNG and is KAT-testable; `arithmetic` for key derivation,
+# `pkcs8`/`std` for the OS-RNG keygen.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "std"] }
+
 [build-dependencies]
 loft-ffi-build = "0.2"

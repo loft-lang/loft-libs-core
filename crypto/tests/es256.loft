@@ -1,0 +1,144 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// ES256 (ECDSA P-256 / SHA-256) known-answer tests.  The vectors are the
+// official RFC 6979 Appendix A.2.5 (ECDSA, 256 bits, SHA-256), base64-encoded.
+// A KAT only validates if the expected values are the real RFC ones, so the
+// hex was taken verbatim from RFC 6979 §A.2.5 and base64-encoded:
+//
+//   x  (private key) = C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721
+//   Ux (public  key) = 60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6
+//   Uy               = 7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299
+//
+//   with SHA-256, message = "sample":
+//     r = EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716
+//     s = F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8
+//   with SHA-256, message = "test":
+//     r = F1ABB023518351CD71D881567B1EA663ED3EFCF6C5132B354F28D3B0B7D38367
+//     s = 019F4113742A2B14BD25926B49C649155F267E60D3814B4C0CC84250E46F0083
+//
+// The public key is the 64-byte `x || y`; a signature is the 64-byte raw
+// `r || s` (the JOSE form ACME wants, not DER).  Because signing is
+// deterministic (RFC 6979), the signature bytes are a fixed golden — this
+// pins the whole ES256 stack across the interpret == native == wasm gate.
+//
+// All KAT values are bound to LOCALS before use: a loft-function-returned or
+// bare-literal `text` handed straight into a native call as a TEMPORARY hits a
+// native store-lifetime bug (the arg's pointer arrives null while its length
+// survives).  Binding first is the ed25519 tests' convention too.
+
+use crypto;
+
+// ── RFC 6979 A.2.5, message "sample" ─────────────────────────────────
+
+fn test_es256_rfc6979_public_key() {
+  sk = "ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE=";
+  expected = "YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Z5A/4QCLi8maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==";
+  pk = crypto::ecdsa_p256_public_key(sk);
+  assert(pk == expected, "es256 RFC6979 A.2.5 public key: {pk}");
+}
+
+fn test_es256_rfc6979_sign_sample() {
+  sk = "ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE=";
+  msg = "c2FtcGxl"; // "sample"
+  expected = "79SLKqy2qP0RQN2c1F6B1p0sh3tWqvmRw00OqE6vNxb3yxyULWV8QdQ2x6G24p9l8+kA27mv9AZNxKsvhDrNqA==";
+  sig = crypto::ecdsa_p256_sign(sk, msg);
+  assert(sig == expected, "es256 RFC6979 A.2.5 'sample' signature: {sig}");
+}
+
+fn test_es256_rfc6979_verify_sample() {
+  pk = "YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Z5A/4QCLi8maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==";
+  msg = "c2FtcGxl";
+  sig = "79SLKqy2qP0RQN2c1F6B1p0sh3tWqvmRw00OqE6vNxb3yxyULWV8QdQ2x6G24p9l8+kA27mv9AZNxKsvhDrNqA==";
+  ok = crypto::ecdsa_p256_verify(pk, msg, sig);
+  assert(ok, "es256 verify must accept the RFC6979 'sample' signature");
+}
+
+// ── RFC 6979 A.2.5, message "test" ───────────────────────────────────
+
+fn test_es256_rfc6979_sign_test() {
+  sk = "ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE=";
+  msg = "dGVzdA=="; // "test"
+  expected = "8auwI1GDUc1x2IFWex6mY+0+/PbFEys1TyjTsLfTg2cBn0ETdCorFL0lkmtJxkkVXyZ+YNOBS0wMyEJQ5G8Agw==";
+  sig = crypto::ecdsa_p256_sign(sk, msg);
+  assert(sig == expected, "es256 RFC6979 A.2.5 'test' signature: {sig}");
+}
+
+fn test_es256_rfc6979_verify_test() {
+  pk = "YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Z5A/4QCLi8maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==";
+  msg = "dGVzdA==";
+  sig = "8auwI1GDUc1x2IFWex6mY+0+/PbFEys1TyjTsLfTg2cBn0ETdCorFL0lkmtJxkkVXyZ+YNOBS0wMyEJQ5G8Agw==";
+  ok = crypto::ecdsa_p256_verify(pk, msg, sig);
+  assert(ok, "es256 verify must accept the RFC6979 'test' signature");
+}
+
+// ── d = 1 → the NIST P-256 generator point (independently checkable) ──
+//
+// The public key for the scalar d = 1 is the base point G, whose affine
+// coordinates are the standard SEC 2 / NIST P-256 generator (Gx || Gy).
+
+fn test_es256_scalar_one_is_generator() {
+  d1 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE="; // 31 zero bytes || 0x01
+  expected = "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==";
+  pk = crypto::ecdsa_p256_public_key(d1);
+  assert(pk == expected, "es256 public key for d=1 is the P-256 generator G: {pk}");
+}
+
+// ── keygen round-trip (keygen is random → structural, not byte-KAT) ───
+
+fn test_es256_keygen_round_trip() {
+  sk = crypto::ecdsa_p256_keygen();
+  sk_bytes = crypto::base64_to_bytes(sk);
+  assert(len(sk_bytes) == 32, "es256 keygen yields a 32-byte scalar");
+  pk = crypto::ecdsa_p256_public_key(sk);
+  pk_bytes = crypto::base64_to_bytes(pk);
+  assert(len(pk_bytes) == 64, "es256 public key is a 64-byte x||y point");
+  msg = "YWNtZSBuZXdPcmRlcg=="; // "acme newOrder"
+  sig = crypto::ecdsa_p256_sign(sk, msg);
+  sig_bytes = crypto::base64_to_bytes(sig);
+  assert(len(sig_bytes) == 64, "es256 signature is a 64-byte r||s");
+  ok = crypto::ecdsa_p256_verify(pk, msg, sig);
+  assert(ok, "a fresh es256 signature verifies");
+}
+
+fn test_es256_keygen_two_calls_differ() {
+  // Two independent P-256 keygens colliding is ~2^-256.
+  a = crypto::ecdsa_p256_keygen();
+  b = crypto::ecdsa_p256_keygen();
+  assert(a != b, "es256 keygen draws a fresh scalar each call");
+}
+
+// ── Tamper / wrong-message rejection ──────────────────────────────────
+
+fn test_es256_verify_rejects_tampered_signature() {
+  pk = "YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Z5A/4QCLi8maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==";
+  msg = "dGVzdA==";
+  // The 'test' signature with its leading `r` byte flipped (first char 8 → A:
+  // decoded byte 0xF1 → 0x01), a genuinely different byte string.
+  tampered = "AauwI1GDUc1x2IFWex6mY+0+/PbFEys1TyjTsLfTg2cBn0ETdCorFL0lkmtJxkkVXyZ+YNOBS0wMyEJQ5G8Agw==";
+  ok = crypto::ecdsa_p256_verify(pk, msg, tampered);
+  assert(!ok, "es256 verify must reject a tampered signature");
+}
+
+fn test_es256_verify_rejects_wrong_message() {
+  pk = "YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Z5A/4QCLi8maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==";
+  wrong_msg = "dGVzdA=="; // the 'sample' signature verified over "test" must fail
+  sig = "79SLKqy2qP0RQN2c1F6B1p0sh3tWqvmRw00OqE6vNxb3yxyULWV8QdQ2x6G24p9l8+kA27mv9AZNxKsvhDrNqA==";
+  ok = crypto::ecdsa_p256_verify(pk, wrong_msg, sig);
+  assert(!ok, "es256 verify must reject a signature over a different message");
+}
+
+// ── Malformed input is loft-safe (no panic) ───────────────────────────
+
+fn test_es256_malformed_input_is_safe() {
+  short = "dG9vc2hvcnQ="; // "tooshort" = 8 bytes
+  msg = "dGVzdA==";
+  empty_pk = crypto::ecdsa_p256_public_key(short);
+  assert(empty_pk == "", "ecdsa_p256_public_key on a short secret returns empty");
+
+  empty_sig = crypto::ecdsa_p256_sign(short, msg);
+  assert(empty_sig == "", "ecdsa_p256_sign on a short secret returns empty");
+
+  bad = crypto::ecdsa_p256_verify(short, msg, short);
+  assert(!bad, "ecdsa_p256_verify on malformed key/sig returns false");
+}

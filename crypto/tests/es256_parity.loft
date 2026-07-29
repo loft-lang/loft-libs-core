@@ -1,0 +1,54 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// ES256 four-target parity driver (the crypto_simple.loft convention: a `fn main`
+// that `loft test` runs on interpret + --native, and that you also BUILD to the
+// two wasm targets to prove the deterministic bytes are identical there):
+//
+//   loft tests/es256_parity.loft                 # interpret
+//   loft tests/es256_parity.loft --native
+//   loft tests/es256_parity.loft --native-wasm   # then: wasmtime tests/.loft/es256_parity.wasm
+//   loft tests/es256_parity.loft --html          # then: serve tests/.loft/ + headless chromium
+//
+// The deterministic ops (public_key / sign / verify over the RFC 6979 A.2.5
+// vectors) must be byte-identical on all four; keygen is random, so it is only
+// checked structurally (a fresh key must sign-and-verify, and be 44 base64 chars
+// = a 32-byte scalar).  Values are bound to LOCALS before each native call — a
+// bare literal handed straight in as a temporary hits a native store-lifetime
+// bug (arg pointer arrives null).
+use crypto;
+
+fn main() {
+  sk = "ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE=";
+  exp_pk = "YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Z5A/4QCLi8maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==";
+  exp_sig_sample = "79SLKqy2qP0RQN2c1F6B1p0sh3tWqvmRw00OqE6vNxb3yxyULWV8QdQ2x6G24p9l8+kA27mv9AZNxKsvhDrNqA==";
+  exp_sig_test = "8auwI1GDUc1x2IFWex6mY+0+/PbFEys1TyjTsLfTg2cBn0ETdCorFL0lkmtJxkkVXyZ+YNOBS0wMyEJQ5G8Agw==";
+
+  pk = crypto::ecdsa_p256_public_key(sk);
+  sig_sample = crypto::ecdsa_p256_sign(sk, "c2FtcGxl"); // "sample"
+  sig_test = crypto::ecdsa_p256_sign(sk, "dGVzdA==");   // "test"
+  ok_sample = crypto::ecdsa_p256_verify(pk, "c2FtcGxl", sig_sample);
+  ok_test = crypto::ecdsa_p256_verify(pk, "dGVzdA==", sig_test);
+
+  assert(pk == exp_pk, "es256 parity: public key");
+  assert(sig_sample == exp_sig_sample, "es256 parity: 'sample' signature");
+  assert(sig_test == exp_sig_test, "es256 parity: 'test' signature");
+  assert(ok_sample, "es256 parity: 'sample' verifies");
+  assert(ok_test, "es256 parity: 'test' verifies");
+
+  // keygen round-trip: random, so structural — a fresh key must verify, and a
+  // 32-byte P-256 scalar is 44 base64 chars.
+  fresh = crypto::ecdsa_p256_keygen();
+  fresh_pk = crypto::ecdsa_p256_public_key(fresh);
+  fresh_sig = crypto::ecdsa_p256_sign(fresh, "cGluZw=="); // "ping"
+  fresh_ok = crypto::ecdsa_p256_verify(fresh_pk, "cGluZw==", fresh_sig);
+  fresh_b64len = len(fresh);
+  assert(fresh_ok, "es256 parity: a fresh keygen key signs and verifies");
+  assert(fresh_b64len == 44, "es256 parity: keygen scalar is 44 base64 chars (32 bytes)");
+
+  // Printed so a --native-wasm / --html build can be diffed against interpret.
+  println("PARITY pk={pk}");
+  println("PARITY sig_sample={sig_sample}");
+  println("PARITY sig_test={sig_test}");
+  println("PARITY verify={ok_sample}/{ok_test} keygen_ok={fresh_ok} keygen_b64len={fresh_b64len}");
+}

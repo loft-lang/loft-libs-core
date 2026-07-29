@@ -6,8 +6,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # crypto — cryptographic primitives for loft
 
 SHA-256, HMAC-SHA-256, base64 / base64url, X25519 key agreement (RFC 7748),
-Ed25519 signatures (RFC 8032), AES-256-GCM authenticated encryption,
-HKDF-SHA256 (RFC 5869), HPKE base mode (RFC 9180), and OS-CSPRNG random bytes.
+Ed25519 signatures (RFC 8032), ES256 / ECDSA-P256 signatures (RFC 7518, the
+JOSE / ACME signature), AES-256-GCM authenticated encryption, HKDF-SHA256
+(RFC 5869), HPKE base mode (RFC 9180), and OS-CSPRNG random bytes.
 Pure-Rust implementations exported through the loft FFI: the hashing / base64
 primitives are dependency-free; the curve, AEAD, and KDF primitives wrap the
 vetted dalek / RustCrypto crates (no openssl / ring, so the cdylib
@@ -69,6 +70,10 @@ Every function fails **soft**: malformed input returns `""` (or `false` for
 | `ed25519_public_key(secret_key_b64) -> text` | 32-byte public key; `""` if the seed ≠ 32 bytes |
 | `ed25519_sign(secret_key_b64, message_b64) -> text` | 64-byte signature (RFC 8032; secret = 32-byte seed) |
 | `ed25519_verify(public_key_b64, message_b64, signature_b64) -> boolean` | `true` iff valid; `false` on any malformed input |
+| `ecdsa_p256_keygen() -> text` | fresh 32-byte P-256 secret scalar (OS-CSPRNG) |
+| `ecdsa_p256_public_key(secret_key_b64) -> text` | 64-byte public key `x‖y` (JWK coordinates, no SEC1 prefix); `""` on a bad secret |
+| `ecdsa_p256_sign(secret_key_b64, message_b64) -> text` | 64-byte raw `r‖s` ES256 signature (RFC 7518; deterministic RFC 6979 — the JOSE form, not DER) |
+| `ecdsa_p256_verify(public_key_b64, message_b64, signature_b64) -> boolean` | `true` iff valid; `false` on any malformed input |
 
 ### Authenticated encryption — AES-256-GCM
 
@@ -101,9 +106,10 @@ key and the AEAD ciphertext, both base64.
 |---|---|
 | `random_bytes(length: integer) -> text` | `length` OS-CSPRNG bytes, base64 (`""` for `length ≤ 0`) |
 
-Every primitive is verified against the RFC 8032 / 7748 / 5869 / 9180
+Every primitive is verified against the RFC 8032 / 7748 / 5869 / 9180 / 6979
 known-answer vectors and the Wycheproof AES-GCM cases — see `tests/`, which the
-parity gate runs identically on the interpreter and `--native`.
+parity gate runs identically on the interpreter and `--native` (ES256 is also
+proven byte-identical on `--native-wasm` and `--html` via `tests/es256_parity.loft`).
 
 ## Building from source
 

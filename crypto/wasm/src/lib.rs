@@ -47,6 +47,8 @@ mod sha256;
 mod base64;
 #[path = "../../native/src/ed25519.rs"]
 mod ed25519;
+#[path = "../../native/src/es256.rs"]
+mod es256;
 #[path = "../../native/src/x25519.rs"]
 mod x25519;
 #[path = "../../native/src/aes256gcm.rs"]
@@ -246,6 +248,47 @@ pub fn crypto_ed25519_verify(
     ed25519::verify(pk_b64, msg_b64, sig_b64)
 }
 
+// ── ES256 (ECDSA P-256 / SHA-256) — base64 in/out, SHARED with native ───────
+//
+// sign / verify / public_key are deterministic (RFC 6979) and share `es256.rs`
+// with native, so their bytes match native BY CONSTRUCTION.  `keygen` is the one
+// entropy user: `es256::generate` is cfg'd out for wasm32-unknown-unknown, so the
+// bridge draws its 32 seed bytes through the same `random_fill` host import
+// `random_bytes` uses and reduces them with the shared `es256::scalar_from_seed`.
+
+/// `crypto::ecdsa_p256_keygen() -> text` — a fresh 32-byte P-256 secret scalar (base64).
+/// Entropy is the host's `crypto.getRandomValues`; the reduction to a valid scalar is
+/// the shared `es256::scalar_from_seed`, so a browser key is a real P-256 key.
+pub fn crypto_ecdsa_p256_keygen(_stores: &mut Stores) -> String {
+    let mut seed = [0u8; 32];
+    // SAFETY: the host fills exactly `seed.len()` bytes at the buffer's pointer.
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        random_fill(seed.as_mut_ptr(), seed.len());
+    }
+    es256::scalar_from_seed(&seed)
+}
+
+/// `crypto::ecdsa_p256_public_key(secret_key_b64) -> text` — 64-byte `x || y` public key.
+pub fn crypto_ecdsa_p256_public_key(_stores: &mut Stores, sk_b64: &str) -> String {
+    es256::public_key(sk_b64)
+}
+
+/// `crypto::ecdsa_p256_sign(secret_key_b64, message_b64) -> text` — 64-byte `r || s` signature.
+pub fn crypto_ecdsa_p256_sign(_stores: &mut Stores, sk_b64: &str, msg_b64: &str) -> String {
+    es256::sign(sk_b64, msg_b64)
+}
+
+/// `crypto::ecdsa_p256_verify(public_key_b64, message_b64, signature_b64) -> boolean`.
+pub fn crypto_ecdsa_p256_verify(
+    _stores: &mut Stores,
+    pk_b64: &str,
+    msg_b64: &str,
+    sig_b64: &str,
+) -> bool {
+    es256::verify(pk_b64, msg_b64, sig_b64)
+}
+
 // ── X25519 ECDH (RFC 7748) — base64 in/out, SHARED with native ──────────────
 
 /// `crypto::x25519_dh(secret_key_b64, public_key_b64) -> text` — 32-byte shared secret.
@@ -288,6 +331,20 @@ pub fn crypto_aes256gcm_open(
 unsafe extern "C" {
     fn random_fill(ptr: *mut u8, len: usize);
 }
+
+// p256 (ES256) drags the `getrandom` crate into the wasm build via `rand_core`, even though the
+// deterministic ES256 ops never draw from it.  On wasm32-unknown-unknown getrandom has no default
+// backend and `compile_error!`s, so we register a CUSTOM one routed to the same host entropy the
+// bridge already uses (`random_fill` → `crypto.getRandomValues`).  No wasm-bindgen; inert on any
+// target that has a real OS backend.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn browser_getrandom(buf: &mut [u8]) -> Result<(), getrandom::Error> {
+    // SAFETY: the host fills exactly `buf.len()` bytes at the buffer's pointer.
+    unsafe { random_fill(buf.as_mut_ptr(), buf.len()) };
+    Ok(())
+}
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+getrandom::register_custom_getrandom!(browser_getrandom);
 
 /// `crypto::random_bytes(length) -> text` — base64 of `length` CSPRNG bytes; "" for
 /// `length <= 0`.  On wasm the entropy is the host's `crypto.getRandomValues`; a

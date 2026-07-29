@@ -29,3 +29,12 @@ loft = { path = "../../../loft", default-features = false, features = ["random"]
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast"] }
 x25519-dalek  = { version = "2.0", default-features = false, features = ["static_secrets"] }
 aes-gcm       = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+# ES256 (ECDSA P-256): sign / verify / public-key derivation are all deterministic (RFC 6979) and
+# need NO RNG at call time.  But p256 → elliptic-curve → rand_core pulls the `getrandom` CRATE into
+# the build, and getrandom `compile_error!`s on wasm32-unknown-unknown without a backend (the browser
+# has no OS entropy).  So we give getrandom a CUSTOM backend routed to the host's crypto.getRandomValues
+# (`random_fill`, `wasm/src/lib.rs`) — the RustCrypto-idiomatic wasm32-unknown-unknown fix, with NO
+# wasm-bindgen.  Same version + features as the native manifest, so the deterministic bytes match by
+# construction.  `keygen` still draws its 32 seed bytes through `random_fill` explicitly.
+p256          = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "std"] }
+getrandom     = { version = "0.2", features = ["custom"] }

@@ -43,6 +43,18 @@ fn ed25519_sign_native(secret_key_b64: text, message_b64: text) -> text;
 fn ed25519_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
 #native "n_ed25519_verify"
 
+fn ecdsa_p256_keygen_native() -> text;
+#native "n_ecdsa_p256_keygen"
+
+fn ecdsa_p256_public_key_native(secret_key_b64: text) -> text;
+#native "n_ecdsa_p256_public_key"
+
+fn ecdsa_p256_sign_native(secret_key_b64: text, message_b64: text) -> text;
+#native "n_ecdsa_p256_sign"
+
+fn ecdsa_p256_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
+#native "n_ecdsa_p256_verify"
+
 fn x25519_dh_native(secret_key_b64: text, public_key_b64: text) -> text;
 #native "n_x25519_dh"
 
@@ -130,6 +142,40 @@ pub fn ed25519_sign(secret_key_b64: text, message_b64: text) -> text {
 // Returns true iff the signature is valid.
 pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean {
   ed25519_verify_native(public_key_b64, message_b64, signature_b64)
+}
+
+// --- ES256 signatures (ECDSA P-256 / SHA-256, JOSE `alg: ES256`) ---
+//
+// The signature RFC 8555 ACME requires for account keys and CSRs — Let's Encrypt
+// rejects Ed25519 account keys, so ES256 cannot be replaced by the ed25519 path.
+// All bytes are standard base64 `text`.  A secret key is the 32-byte P-256 scalar
+// `d`; a public key is the 64-byte affine point `x || y` (the JWK coordinates,
+// no 0x04 SEC1 prefix); a signature is the 64-byte raw `r || s` (the JOSE form —
+// the DER encoding is for the X.509/PKCS#10 layer, never for a JWS signature).
+// Signing is deterministic (RFC 6979), so the same key + message always signs to
+// the same bytes; only `keygen` draws entropy.  Malformed input never halts:
+// `ecdsa_p256_keygen` / `_public_key` / `_sign` return "" and `_verify` false.
+
+// Generate a fresh 32-byte P-256 secret scalar (base64) from the OS CSPRNG.
+pub fn ecdsa_p256_keygen() -> text {
+  ecdsa_p256_keygen_native()
+}
+
+// Derive the 64-byte public key `x || y` (base64) from a 32-byte secret scalar (base64).
+pub fn ecdsa_p256_public_key(secret_key_b64: text) -> text {
+  ecdsa_p256_public_key_native(secret_key_b64)
+}
+
+// Sign the base64 `message` bytes with the 32-byte secret scalar (base64).
+// Returns the 64-byte `r || s` signature (base64), deterministic per RFC 6979.
+pub fn ecdsa_p256_sign(secret_key_b64: text, message_b64: text) -> text {
+  ecdsa_p256_sign_native(secret_key_b64, message_b64)
+}
+
+// Verify an ES256 signature (64-byte `r || s`) over the base64 `message` bytes
+// under a 64-byte `x || y` public key.  Returns true iff the signature is valid.
+pub fn ecdsa_p256_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean {
+  ecdsa_p256_verify_native(public_key_b64, message_b64, signature_b64)
 }
 
 // --- X25519 key agreement (RFC 7748) ---

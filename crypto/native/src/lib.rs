@@ -25,6 +25,7 @@ use loft_ffi_macros::loft_native;
 mod aes256gcm;
 mod base64;
 mod ed25519;
+mod es256;
 mod hkdf;
 mod hpke_bytes;
 mod random;
@@ -168,6 +169,67 @@ pub unsafe extern "C" fn n_ed25519_verify(
     let msg = unsafe { std::str::from_utf8(cr_in(msg_ptr, msg_len)).unwrap_or("") };
     let sig = unsafe { std::str::from_utf8(cr_in(sig_ptr, sig_len)).unwrap_or("") };
     ed25519::verify(pk, msg, sig)
+}
+
+// ── ES256 (ECDSA P-256 / SHA-256, JOSE) — text-only base64 API ─────────
+//
+// The signature ACME (RFC 8555) requires for account keys + CSRs; Let's Encrypt
+// rejects Ed25519 account keys, so this cannot reuse the ed25519 path.  A secret
+// key is the 32-byte P-256 scalar `d` (base64); a public key is the 64-byte
+// affine point `x || y` (base64, the JWK coordinates, no 0x04 SEC1 prefix); a
+// signature is the 64-byte raw `r || s` (base64, the JOSE encoding — never DER).
+// Signing is deterministic (RFC 6979), so it needs no RNG and is KAT-testable;
+// only `keygen` draws OS entropy.  Malformed input never panics: `keygen` /
+// `public_key` / `sign` return "" and `verify` returns false.
+
+/// `#native "n_ecdsa_p256_keygen"` — a fresh 32-byte P-256 secret scalar (base64)
+/// from the OS CSPRNG; "" only on an OS RNG failure.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ecdsa_p256_keygen() -> LoftStr {
+    cr_ret(es256::generate())
+}
+
+/// `#native "n_ecdsa_p256_public_key"` — 64-byte public key `x || y` (base64)
+/// from a 32-byte secret scalar (base64); "" on a bad secret.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ecdsa_p256_public_key(sk_ptr: *const u8, sk_len: usize) -> LoftStr {
+    let sk = unsafe { std::str::from_utf8(cr_in(sk_ptr, sk_len)).unwrap_or("") };
+    cr_ret(es256::public_key(sk))
+}
+
+/// `#native "n_ecdsa_p256_sign"` — 64-byte `r || s` ES256 signature (base64) over
+/// the base64 `message` bytes under the 32-byte secret scalar; "" on a bad secret.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ecdsa_p256_sign(
+    sk_ptr: *const u8,
+    sk_len: usize,
+    msg_ptr: *const u8,
+    msg_len: usize,
+) -> LoftStr {
+    let sk = unsafe { std::str::from_utf8(cr_in(sk_ptr, sk_len)).unwrap_or("") };
+    let msg = unsafe { std::str::from_utf8(cr_in(msg_ptr, msg_len)).unwrap_or("") };
+    cr_ret(es256::sign(sk, msg))
+}
+
+/// `#native "n_ecdsa_p256_verify"` — true iff `signature` (base64, 64B `r || s`) is
+/// valid over the base64 `message` bytes under `public_key` (base64, 64B `x || y`).
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ecdsa_p256_verify(
+    pk_ptr: *const u8,
+    pk_len: usize,
+    msg_ptr: *const u8,
+    msg_len: usize,
+    sig_ptr: *const u8,
+    sig_len: usize,
+) -> bool {
+    let pk = unsafe { std::str::from_utf8(cr_in(pk_ptr, pk_len)).unwrap_or("") };
+    let msg = unsafe { std::str::from_utf8(cr_in(msg_ptr, msg_len)).unwrap_or("") };
+    let sig = unsafe { std::str::from_utf8(cr_in(sig_ptr, sig_len)).unwrap_or("") };
+    es256::verify(pk, msg, sig)
 }
 
 // ── X25519 ECDH (RFC 7748) — text-only base64 API ──────────────────────
