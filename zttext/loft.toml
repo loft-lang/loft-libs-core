@@ -1,0 +1,19 @@
+[package]
+name = "zttext"
+version = "0.1.0"
+loft = ">=0.8"                   # which loft this package needs (a RANGE, unlike the two below)
+api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+
+# The three floors are what makes this registrable: a consumer cannot ask the
+# package a question, so the package has to state the axes an upgrade can hurt it
+# on — the platform, its call sites, its stored data.  `loft compat floor`
+# measured the two own-release floors: with no earlier release installed, this
+# release is the only thing it can claim to be a drop-in for, which is the correct
+# FIRST declaration rather than a placeholder — it becomes meaningful the moment
+# 0.1.1 keeps it.  Raising one later is how a break is declared.
+
+[library]
+entry = "src/zttext.loft"
+
+[dependencies]

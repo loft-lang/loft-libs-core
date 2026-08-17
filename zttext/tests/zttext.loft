@@ -1,0 +1,938 @@
+// Tests for zttext — the text engine. Run: `loft test` (interpret) and `loft test --native`.
+// Each test asserts a concrete invariant from doc/ZTTEXT_NOTATION.md (I1–I9); the parity
+// gate (interpret == native == native-wasm) is the definition of done per step.
+use zttext;
+
+// ============================ reference model (test-only) ============================
+// A deliberately naive, obviously-correct model — a flat vector<character> for the text
+// and a flat vector<integer> for per-character styles, spliced with ordinary vector ops.
+// M0's job is to prove the piece store agrees with THIS after every edit.
+
+fn ref_chars(s: text) -> vector<character> {
+  out: vector<character> = [];
+  for c in s { out += [c]; }
+  return out;
+}
+fn chars_to_text(cs: vector<character>) -> text {
+  out: text = "";
+  for i in 0..len(cs) { ch = cs[i]?; out += "{ch}"; }
+  return out;
+}
+fn ref_ins(cs: vector<character>, a: integer, s: text) -> vector<character> {
+  out: vector<character> = [];
+  left = cs[0..a];
+  right = cs[a..len(cs)];
+  out += left;
+  for c2 in s { out += [c2]; }
+  out += right;
+  return out;
+}
+fn ref_del(cs: vector<character>, a: integer, b: integer) -> vector<character> {
+  out: vector<character> = [];
+  left = cs[0..a];
+  right = cs[b..len(cs)];
+  out += left;
+  out += right;
+  return out;
+}
+fn ref_ins_sty(st: vector<integer>, a: integer, n: integer, style: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  left = st[0..a];
+  right = st[a..len(st)];
+  out += left;
+  for _k in 0..n { out += [style]; }
+  out += right;
+  return out;
+}
+fn ref_del_sty(st: vector<integer>, a: integer, b: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  left = st[0..a];
+  right = st[b..len(st)];
+  out += left;
+  out += right;
+  return out;
+}
+fn ref_set_sty(st: vector<integer>, a: integer, b: integer, style: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  for k in 0..len(st) {
+    if (k >= a) && (k < b) { out += [style]; } else { out += [st[k]?]; }
+  }
+  return out;
+}
+fn ints_eq(a: vector<integer>, b: vector<integer>) -> boolean {
+  if len(a) != len(b) { return false; }
+  for i in 0..len(a) { if (a[i]?) != (b[i]?) { return false; } }
+  return true;
+}
+// assert doc == reference (text AND per-character styles) — the piece-blind check (I2).
+fn check(d: Doc, rc: vector<character>, rs: vector<integer>, label: text) {
+  assert(materialise(d) == chars_to_text(rc), "{label}: text matches reference");
+  assert(ints_eq(char_styles(d), rs), "{label}: per-char styles match reference");
+}
+// a named StyleResolver used as a port value (id 1 → size 2.0, else default).
+fn demo_resolver(id: integer) -> Style {
+  if id == 1 { return Style { size: 2.0, weight: 0, italic: false, dir: 0 }; }
+  return default_style();
+}
+// a resolver where style 1 is RTL (dir 1) but the SAME width (size 1) — isolates BiDi
+// reorder from width changes so the hand-computed x-positions stay simple.
+fn rtl_resolver(id: integer) -> Style {
+  if id == 1 { return Style { size: 1.0, weight: 0, italic: false, dir: 1 }; }
+  return default_style();
+}
+// a fn that consumes a Measurer PORT — proves μ is passable as a first-class value.
+fn measure_via(m: fn(text, Style) -> float, s: text, st: Style) -> float { return m(s, st); }
+
+// a mutable work counter for the strain suite (a heap struct a counting-measurer closure
+// captures and increments — so μ-calls are tallied across the layout/patch call boundary).
+struct Counter { n: integer }
+
+// build a base of `n` fixed-width words ("aaaa "), so line boundaries fall at predictable
+// char positions (multiples of the per-line char count) regardless of `n`.
+fn repeat_word(n: integer) -> text {
+  base: text = "";
+  for _k in 0..n { base += "aaaa "; }
+  return base;
+}
+
+// ============================ S0.1 scaffold ============================
+fn test_scaffold() {
+  assert(zttext_version() == "0.1.0-dev", "scaffold: version constant is reachable");
+}
+
+// ============================ S0.2 materialise + length ============================
+fn test_materialise() {
+  d = doc_from_text("hello world", 0);
+  assert(materialise(d) == "hello world", "materialise a single piece");
+  assert(doc_len(d) == 11, "doc_len = 11 characters");
+  d2 = insert_text(d, 5, ",", 0);
+  assert(materialise(d2) == "hello, world", "2-piece materialise stitches spans in order");
+  assert(len(d2.pieces) == 3, "insert mid-piece splits into 3 pieces (left · new · right)");
+  // multi-byte: offsets are CHARACTERS, not bytes (the @PLN110 trap, designed out)
+  dm = doc_from_text("héllo", 0);
+  assert(doc_len(dm) == 5, "doc_len counts CHARACTERS (héllo = 5, not 6 bytes)");
+  dm2 = insert_text(dm, 2, "X", 0);
+  assert(materialise(dm2) == "héXllo", "insert at char offset 2 lands after 'é', not mid-byte");
+}
+
+// ============================ S0.3 locate + inverse ============================
+fn test_locate() {
+  d = doc_from_text("abcdef", 0);
+  d = insert_text(d, 3, "XY", 0);   // "abcXYdef", pieces [abc][XY][def]
+  l0 = locate(d, 0); assert((l0.0 == 0) && (l0.1 == 0), "locate 0 → (0,0)");
+  l3 = locate(d, 3); assert((l3.0 == 1) && (l3.1 == 0), "locate 3 → boundary lands at (piece 1, 0)");
+  l4 = locate(d, 4); assert((l4.0 == 1) && (l4.1 == 1), "locate 4 → (piece 1, 1)");
+  l5 = locate(d, 5); assert((l5.0 == 2) && (l5.1 == 0), "locate 5 → (piece 2, 0)");
+  le = locate(d, 8); assert((le.0 == 3) && (le.1 == 0), "locate end → (n_pieces, 0) sentinel");
+  assert(locate_inverse(d, l4.0, l4.1) == 4, "locate_inverse round-trips a mid offset");
+  assert(locate_inverse(d, le.0, le.1) == 8, "locate_inverse round-trips the end");
+}
+
+// ============================ S0.4/S0.5/S0.5b edits vs reference (I2) ============================
+fn test_edit_reference() {
+  d = doc_from_text("the quick brown fox", 0);
+  rc = ref_chars("the quick brown fox");
+  rs: vector<integer> = [];
+  for _z in 0..19 { rs += [0]; }
+  check(d, rc, rs, "start");
+
+  // insert empty = no-op
+  d = insert_text(d, 5, "", 0);
+  check(d, rc, rs, "insert-empty");
+
+  // insert mid, styled
+  d = insert_text(d, 4, "very ", 2);   rc = ref_ins(rc, 4, "very ");   rs = ref_ins_sty(rs, 4, 5, 2);
+  check(d, rc, rs, "insert-mid-styled");
+
+  // insert at 0
+  d = insert_text(d, 0, ">> ", 1);     rc = ref_ins(rc, 0, ">> ");     rs = ref_ins_sty(rs, 0, 3, 1);
+  check(d, rc, rs, "insert-start");
+
+  // insert at end
+  e = doc_len(d);
+  d = insert_text(d, e, " <<", 1);     rc = ref_ins(rc, e, " <<");     rs = ref_ins_sty(rs, e, 3, 1);
+  check(d, rc, rs, "insert-end");
+
+  // delete within one piece
+  d = delete_range(d, 3, 6);      rc = ref_del(rc, 3, 6);         rs = ref_del_sty(rs, 3, 6);
+  check(d, rc, rs, "delete-within");
+
+  // delete across piece boundaries
+  d = delete_range(d, 2, 12);     rc = ref_del(rc, 2, 12);        rs = ref_del_sty(rs, 2, 12);
+  check(d, rc, rs, "delete-across");
+
+  // set style within a piece
+  d = set_style(d, 1, 4, 5);      rs = ref_set_sty(rs, 1, 4, 5);
+  check(d, rc, rs, "setstyle-within");
+
+  // set style across boundaries
+  d = set_style(d, 0, doc_len(d), 7);   rs = ref_set_sty(rs, 0, len(rs), 7);
+  check(d, rc, rs, "setstyle-all");
+
+  // delete the whole document
+  d = delete_range(d, 0, doc_len(d));   rc = ref_del(rc, 0, len(rc)); rs = ref_del_sty(rs, 0, len(rs));
+  assert(materialise(d) == "", "delete-whole → empty text");
+  assert(doc_len(d) == 0, "delete-whole → length 0");
+}
+
+// ============================ S0.6 transactions ============================
+fn test_transactions() {
+  d = doc_from_text("abcdef", 0);
+  ops: vector<Op> = [];
+  ops += [ Ins { at: 3, str: "12", style: 0 } ];   // "abc12def"
+  ops += [ Ins { at: 0, str: ">", style: 0 } ];    // ">abc12def"
+  ops += [ Del { from: 4, to: 6 } ];               // removes "12" → ">abcdef"
+  t = txn_of(ops);
+  d1 = apply(d, t);
+  // sequential-ops equivalence: apply op-by-op must equal the transaction
+  step = d;
+  for i in 0..len(ops) { step = apply_op(step, ops[i]?); }
+  assert(materialise(d1) == materialise(step), "τ equals the sequential composition of its ops");
+  assert(materialise(d1) == ">abcdef", "txn [ins,ins,del] result is exactly >abcdef");
+}
+
+// ============================ S0.7 invert / undo (I1) ============================
+fn test_undo() {
+  d0 = doc_from_text("hello world", 0);
+  d0 = set_style(d0, 0, 5, 1);   // "hello" style 1, " world" style 0 — a multi-style base
+  ops: vector<Op> = [];
+  ops += [ Ins { at: 5, str: " BIG", style: 2 } ];
+  ops += [ Del { from: 0, to: 3 } ];
+  ops += [ Sty { from: 0, to: 4, style: 3 } ];
+  t = txn_of(ops);
+  d1 = apply(d0, t);
+  tinv = invert(d0, t);
+  d2 = apply(d1, tinv);
+  assert(materialise(d2) == materialise(d0), "τ⁻¹(τ(D)) restores the text (I1)");
+  assert(ints_eq(char_styles(d2), char_styles(d0)), "τ⁻¹(τ(D)) restores per-char styles (I1)");
+
+  // each op-type inverts on its own
+  da = doc_from_text("abcdef", 0);
+  oi: vector<Op> = []; oi += [ Ins { at: 2, str: "ZZ", style: 5 } ];
+  ti = txn_of(oi);
+  assert(materialise(apply(apply(da, ti), invert(da, ti))) == "abcdef", "single Ins undo");
+  od: vector<Op> = []; od += [ Del { from: 1, to: 4 } ];
+  td = txn_of(od);
+  d_del = apply(da, td);
+  d_back = apply(d_del, invert(da, td));
+  assert(materialise(d_back) == "abcdef", "single Del undo restores deleted text");
+  assert(ints_eq(char_styles(d_back), char_styles(da)), "single Del undo restores styles");
+}
+
+// ============================ S0.8 measurer + style + resolver ports ============================
+fn test_measurer() {
+  st = default_style();
+  assert(mono_measure("abc", st) == 3.0, "mono: 3 chars × 1.0 = 3.0");
+  big = Style { size: 2.5, weight: 1, italic: false, dir: 0 };
+  assert(mono_measure("hello", big) == 12.5, "mono styled: 5 × 2.5 = 12.5");
+  // StyleResolver used as a port value
+  s1 = demo_resolver(1);
+  assert(mono_measure("ab", s1) == 4.0, "resolved style 1 (size 2.0): 2 chars = 4.0");
+  s0 = demo_resolver(0);
+  assert(mono_measure("ab", s0) == 2.0, "resolved style 0 (default): 2 chars = 2.0");
+  // Measurer passed as a first-class port value
+  assert(measure_via(mono_measure, "wxyz", st) == 4.0, "μ is passable as a first-class port");
+  println("lib: zttext — M0 content core OK (materialise · locate · edits · txn · undo · measurer)");
+}
+
+// ============================ S1.2 segmentation ============================
+fn test_seg() {
+  toks = seg(doc_from_text("hello world", 0));
+  assert(len(toks) == 3, "hello world → 3 tokens [W,G,W]");
+  t0 = toks[0]?; assert(t0.word && (t0.ts == 0) && (t0.te == 5), "token0 = word 'hello' [0,5)");
+  t1 = toks[1]?; assert(!t1.word && (t1.ts == 5) && (t1.te == 6), "token1 = glue ' ' [5,6)");
+  t2 = toks[2]?; assert(t2.word && (t2.ts == 6) && (t2.te == 11), "token2 = word 'world' [6,11)");
+  // a multi-space run is ONE glue token
+  toks2 = seg(doc_from_text("a  b", 0));
+  assert(len(toks2) == 3, "a  b → 3 tokens (double space = one glue)");
+  g = toks2[1]?; assert(!g.word && (g.ts == 1) && (g.te == 3), "the glue spans both spaces [1,3)");
+}
+
+// ============================ S1.3 token width ============================
+fn test_token_width() {
+  d = doc_from_text("hello world", 0);
+  toks = seg(d);
+  assert(token_width(d, toks[0]?, default_resolver, mono_measure) == 5.0, "'hello' = 5.0 (monospace)");
+  assert(token_width(d, toks[1]?, default_resolver, mono_measure) == 1.0, "' ' = 1.0");
+}
+
+// ============================ S1.4 greedy line breaking ============================
+fn test_lines_greedy() {
+  d = doc_from_text("aa bb cc", 0);   // tokens: aa=0 G=1 bb=2 G=3 cc=4
+  toks = seg(d);
+  lns = lines_greedy(d, toks, 5.0, default_resolver, mono_measure);
+  assert(len(lns) == 2, "at W=5, 'aa bb cc' breaks into 2 lines");
+  l0 = lns[0]?; assert((l0.first == 0) && (l0.last_excl == 3), "line0 = tokens [0,3) (aa · glue · bb)");
+  l1 = lns[1]?; assert((l1.first == 4) && (l1.last_excl == 5), "line1 = tokens [4,5) (cc); break glue dropped");
+  // everything fits on one line at a wide column
+  lns_wide = lines_greedy(d, toks, 100.0, default_resolver, mono_measure);
+  assert(len(lns_wide) == 1, "at W=100 it is a single line");
+}
+
+// ============================ S1.5 flow layout → exact BoxSet (I3) ============================
+fn test_flow_layout_exact() {
+  d = doc_from_text("hello world", 0);
+  bs = flow_layout(d, default_resolver, mono_measure, 100.0);
+  assert(len(bs.boxes) == 3, "single line → 3 boxes (hello · space · world)");
+  b0 = bs.boxes[0]?;
+  assert((b0.rect.x == 0.0) && (b0.rect.y == 0.0) && (b0.rect.w == 5.0) && (b0.rect.h == 1.0), "box0 rect exact");
+  assert((b0.ks == 0) && (b0.ke == 5), "box0 κ = [0,5) 'hello'");
+  b1 = bs.boxes[1]?;
+  assert((b1.rect.x == 5.0) && (b1.rect.w == 1.0) && (b1.ks == 5) && (b1.ke == 6), "box1 space at x=5");
+  b2 = bs.boxes[2]?;
+  assert((b2.rect.x == 6.0) && (b2.rect.w == 5.0) && (b2.ks == 6) && (b2.ke == 11), "box2 world at x=6");
+  // concatenating box content-refs in order reconstructs the source (single line, no drop)
+  recon = "";
+  for i in 0..len(bs.boxes) { bx = bs.boxes[i]?; recon += materialise_range(d, bx.ks, bx.ke); }
+  assert(recon == "hello world", "box content-refs reconstruct the source (single line)");
+
+  // wrapping: "aa bb cc" at W=5 → 4 boxes; cc drops to line 1
+  bs2 = flow_layout(doc_from_text("aa bb cc", 0), default_resolver, mono_measure, 5.0);
+  assert(len(bs2.boxes) == 4, "wrap → 4 boxes (aa · glue · bb on line0; cc on line1)");
+  bcc = bs2.boxes[3]?;
+  assert((bcc.rect.x == 0.0) && (bcc.rect.y == 1.0), "cc wraps to line 1 (y=1, x=0)");
+  assert((bcc.ks == 6) && (bcc.ke == 8), "cc κ = [6,8)");
+  assert(boxset_height(bs2) == 2.0, "two lines → content height 2.0");
+}
+
+// ============================ D1 line assignment (golden + pure) ============================
+// The per-line char spans a document breaks into — the determinism layer (§8.22) the screen
+// renderer (D2) paints one element per and the PDF emitter (E) paginates from. Golden on a known
+// paragraph, and PROVEN pure: identical inputs → an identical assignment, field-for-field.
+fn test_line_assignment() {
+  d = doc_from_text("aa bb cc", 0);   // at W=5 (mono, size 1): "aa bb" | "cc" (break glue dropped)
+  la = line_assignment(d, default_resolver, mono_measure, 5.0);
+  assert(len(la) == 2, "2-line assignment at W=5");
+  l0 = la[0]?; l1 = la[1]?;
+  assert(materialise_range(d, l0.cs, l0.ce) == "aa bb", "line 0 span = 'aa bb'");
+  assert(materialise_range(d, l1.cs, l1.ce) == "cc", "line 1 span = 'cc'");
+  assert((l0.y == 0.0) && (l1.y == 1.0), "lines stack by height (y = 0, 1)");
+  assert(l1.para_end, "last line marks the paragraph end (justify leaves it ragged)");
+  assert((l0.right == 5.0) && (l1.right == 5.0), "each line's justify edge is the column width");
+
+  // Pure function: recomputing over the same inputs yields a field-identical assignment.
+  la2 = line_assignment(d, default_resolver, mono_measure, 5.0);
+  assert(len(la2) == len(la), "pure: same line count");
+  for i in 0..len(la) {
+    a = la[i]?; b = la2[i]?;
+    assert((a.cs == b.cs) && (a.ce == b.ce) && (a.y == b.y) && (a.para_end == b.para_end), "pure: line {i} identical");
+  }
+  println("lib: zttext — D1 line assignment OK (pure per-line spans: 'aa bb' / 'cc')");
+}
+
+// ============================ S1.5b box-per-run (multi-style word) ============================
+fn test_flow_layout_runs() {
+  d = doc_from_text("hello", 0);
+  d = set_style(d, 0, 3, 1);   // "hel" style 1, "lo" style 0 — one word, two style-runs
+  bs = flow_layout(d, default_resolver, mono_measure, 100.0);
+  assert(len(bs.boxes) == 2, "a word crossing a style boundary → one box per run");
+  b0 = bs.boxes[0]?;
+  assert((b0.ks == 0) && (b0.ke == 3) && (b0.style == 1) && (b0.rect.x == 0.0) && (b0.rect.w == 3.0), "run 'hel' style 1");
+  b1 = bs.boxes[1]?;
+  assert((b1.ks == 3) && (b1.ke == 5) && (b1.style == 0) && (b1.rect.x == 3.0) && (b1.rect.w == 2.0), "run 'lo' style 0 at x=3");
+}
+
+// ============================ S1.6 render dump (golden) + I2 piece-blind ============================
+fn test_render_and_piece_blind() {
+  d = doc_from_text("ab cd", 0);
+  bs = flow_layout(d, default_resolver, mono_measure, 100.0);
+  exp = "[0.0,0.0,2.0,1.0] 0..2 s=0 'ab'\n[2.0,0.0,1.0,1.0] 2..3 s=0 ' '\n[3.0,0.0,2.0,1.0] 3..5 s=0 'cd'\n";
+  assert(render_dump(bs, d) == exp, "render_dump matches the golden string");
+
+  // I2 (piece-blind / P1): same styled string, different piece structure ⇒ identical layout.
+  a = doc_from_text("hello world", 0);                 // one piece
+  b = empty_doc();
+  b = insert_text(b, 0, "world", 0);
+  b = insert_text(b, 0, "hello ", 0);                   // "hello world" via two inserts → different pieces
+  assert(materialise(a) == materialise(b), "the two docs denote the same text");
+  da = render_dump(flow_layout(a, default_resolver, mono_measure, 7.0), a);
+  db = render_dump(flow_layout(b, default_resolver, mono_measure, 7.0), b);
+  assert(da == db, "I2: same styled string ⇒ byte-identical layout, regardless of pieces");
+  println("lib: zttext — M1 render OK (seg · width · lines · flow layout · render dump · piece-blind)");
+}
+
+// ============================ S2.1/S2.2 hit-test → box → anchor (I4) ============================
+fn test_hit_test() {
+  d = doc_from_text("hello world", 0);
+  bs = flow_layout(d, default_resolver, mono_measure, 100.0);   // [0,5) [5,6) [6,11), all y[0,1)
+  assert(box_at(bs, 2.5, 0.5) == 0, "point inside 'hello' → box 0");
+  assert(box_at(bs, 5.5, 0.5) == 1, "point inside the space → box 1");
+  assert(box_at(bs, 8.0, 0.5) == 2, "point inside 'world' → box 2");
+  assert(box_at(bs, 50.0, 0.5) == 0 - 1, "point past the text → no box (-1)");
+  assert(anchor_at(bs, d, 0.0, 0.5, default_resolver, mono_measure) == 0, "click at x=0 → anchor 0");
+  assert(anchor_at(bs, d, 3.0, 0.5, default_resolver, mono_measure) == 3, "click at x=3 → anchor 3");
+  assert(anchor_at(bs, d, 5.0, 0.5, default_resolver, mono_measure) == 5, "click at the space edge → anchor 5");
+  assert(anchor_at(bs, d, 50.0, 0.5, default_resolver, mono_measure) == 11, "click far right → anchor at end (11)");
+  assert(anchor_at(bs, d, 2.5, 5.0, default_resolver, mono_measure) == 2, "click below the line → snaps to it (anchor 2)");
+}
+
+// ============================ S2.3 selection = κ-intersection (I4) ============================
+fn test_selection() {
+  d = doc_from_text("hello world", 0);
+  bs = flow_layout(d, default_resolver, mono_measure, 100.0);
+  s1 = sel(bs, 0, 5); assert((len(s1) == 1) && (s1[0]? == 0), "Sel [0,5) → box 0 only");
+  s2 = sel(bs, 3, 8); assert(len(s2) == 3, "Sel [3,8) spans all three boxes (κ-intersection)");
+  s3 = sel(bs, 6, 11); assert((len(s3) == 1) && (s3[0]? == 2), "Sel [6,11) → box 2 only");
+  s4 = sel(bs, 4, 4); assert(len(s4) == 0, "empty range → no boxes");
+}
+
+// ============================ S2.4 word / line ============================
+fn test_word_line() {
+  d = doc_from_text("the quick fox", 0);
+  w = word_at(d, 5);   assert((w.0 == 4) && (w.1 == 9), "double-click in 'quick' → word [4,9)");
+  w2 = word_at(d, 0);  assert((w2.0 == 0) && (w2.1 == 3), "word at the start → 'the' [0,3)");
+  d2 = doc_from_text("aa bb cc", 0);
+  bs = flow_layout(d2, default_resolver, mono_measure, 5.0);   // line0: aa·glue·bb ; line1: cc
+  lb0 = line_boxes(bs, 0); assert(len(lb0) == 3, "line of anchor 0 → the 3 boxes on visual line 0");
+  lb1 = line_boxes(bs, 7); assert(len(lb1) == 1, "line of anchor 7 → the 1 box on visual line 1");
+}
+
+// ============================ S2.5 BiDi selection — geometry-free Sel (I4) ============================
+fn test_bidi_selection() {
+  // A hand-placed BiDi line (visual reorder ψ is proven in S4.5; here Sel's geometry-freedom
+  // is the point). Logical: "one" [0,3) LTR · an RTL run [3,7) whose 4 chars are placed
+  // RIGHT-TO-LEFT (visual x = 6,5,4,3) · "two" [7,10) LTR.
+  bx: vector<Box> = [];
+  bx += [ Box { rect: Rect { x: 0.0, y: 0.0, w: 3.0, h: 1.0 }, ks: 0, ke: 3, style: 0 } ];   // "one"  x0
+  bx += [ Box { rect: Rect { x: 6.0, y: 0.0, w: 1.0, h: 1.0 }, ks: 3, ke: 4, style: 1 } ];   // RTL[3] x6 (rightmost)
+  bx += [ Box { rect: Rect { x: 5.0, y: 0.0, w: 1.0, h: 1.0 }, ks: 4, ke: 5, style: 1 } ];   // RTL[4] x5
+  bx += [ Box { rect: Rect { x: 4.0, y: 0.0, w: 1.0, h: 1.0 }, ks: 5, ke: 6, style: 1 } ];   // RTL[5] x4
+  bx += [ Box { rect: Rect { x: 3.0, y: 0.0, w: 1.0, h: 1.0 }, ks: 6, ke: 7, style: 1 } ];   // RTL[6] x3 (leftmost)
+  bx += [ Box { rect: Rect { x: 7.0, y: 0.0, w: 3.0, h: 1.0 }, ks: 7, ke: 10, style: 0 } ];  // "two" x7
+  bs = BoxSet { boxes: bx };
+
+  // logically-contiguous RTL range [3,7): the 4 RTL boxes by κ, though visually reversed
+  s_rtl = sel(bs, 3, 7);
+  assert(len(s_rtl) == 4, "Sel [3,7) → the 4 RTL boxes by κ (visual x reversed)");
+  assert((s_rtl[0]? == 1) && (s_rtl[3]? == 4), "…returned in box-index order 1..4");
+
+  // range crossing the LTR→RTL boundary [2,5): ONE logical range, TWO visual clusters
+  s_cross = sel(bs, 2, 5);
+  assert(len(s_cross) == 3, "Sel [2,5) → 3 boxes (one LTR + two RTL): two visual clusters, no split code");
+  assert((s_cross[0]? == 0) && (s_cross[1]? == 1) && (s_cross[2]? == 2), "…boxes chosen by κ, not by x");
+  println("lib: zttext — M2 selection OK (hit-test · anchor · Sel by κ · word/line · BiDi selection)");
+}
+
+// the differential: patch(L(d0), d0, d1) must be byte-identical to a full relayout of d1.
+// Returns the recomputed-box count so callers can also check bounded work.
+fn check_diff(d0: Doc, d1: Doc, w: float, label: text) -> integer {
+  l0 = flow_layout_full(d0, default_resolver, mono_measure, w);
+  pr = patch(l0, d0, d1, default_resolver, mono_measure, w);
+  full = flow_layout_full(d1, default_resolver, mono_measure, w);
+  assert(render_dump_layout(pr.layout, d1) == render_dump_layout(full, d1), "{label}: patch == full relayout (I5)");
+  return pr.recomputed;
+}
+
+// ============================ S3.1/S3.3 incremental == full, diverse edits (I5) ============================
+fn test_incremental() {
+  base = "alpha beta gamma delta epsilon zeta";   // wraps to 5 lines at W=10
+  d = doc_from_text(base, 0);
+  w = 10.0;
+  // insert mid-word on a later line
+  check_diff(d, insert_text(d, 19, "X", 0), w, "insert-mid-word-later-line");
+  // delete across a line boundary
+  check_diff(d, delete_range(d, 15, 18), w, "delete-across-line-boundary");
+  // a block move (delete a word here, insert it there) as one transaction
+  mv: vector<Op> = [];
+  mv += [ Del { from: 11, to: 17 } ];
+  mv += [ Ins { at: 18, str: "gamma ", style: 0 } ];
+  check_diff(d, apply(d, txn_of(mv)), w, "block-move");
+  // a style change on a later range (text unchanged, χ_D changes → still a dirty region)
+  check_diff(d, set_style(d, 23, 30, 1), w, "style-change-later");
+  // insert at the very end
+  check_diff(d, insert_text(d, doc_len(d), " omega", 0), w, "insert-at-end");
+  // an edit in the FIRST line (patch falls back to a full relayout — still correct)
+  check_diff(d, delete_range(d, 0, 6), w, "delete-in-first-line");
+  // a no-op edit reuses everything
+  r_noop = check_diff(d, insert_text(d, 5, "", 0), w, "no-op-edit");
+  assert(r_noop == 0, "a no-op edit recomputes zero boxes");
+  // a width change forces a full rebuild that equals a fresh layout (P1: layout ⟂ pieces)
+  fragmented = empty_doc();
+  fragmented = insert_text(fragmented, 0, "zeta", 0);
+  fragmented = insert_text(fragmented, 0, "epsilon ", 0);
+  fragmented = insert_text(fragmented, 0, "delta ", 0);
+  fragmented = insert_text(fragmented, 0, "alpha beta gamma ", 0);   // == base, many pieces
+  assert(materialise(fragmented) == base, "fragmented doc denotes the same text");
+  clean = doc_from_text(base, 0);
+  assert(render_dump_layout(flow_layout_full(fragmented, default_resolver, mono_measure, 8.0), fragmented)
+      == render_dump_layout(flow_layout_full(clean, default_resolver, mono_measure, 8.0), clean),
+      "P1: a heavily-fragmented doc lays out identically to a clean one (layout ⟂ pieces)");
+}
+
+// ============================ S3.4 caret maps through τ ============================
+fn test_caret_map() {
+  ins_before: vector<Op> = []; ins_before += [ Ins { at: 0, str: "AB", style: 0 } ];
+  assert(map_anchor(6, (ins_before[0]?)) == 8, "insert before the caret shifts it right (+2)");
+  ins_after: vector<Op> = []; ins_after += [ Ins { at: 9, str: "Z", style: 0 } ];
+  assert(map_anchor(6, (ins_after[0]?)) == 6, "insert after the caret leaves it");
+  ins_at: vector<Op> = []; ins_at += [ Ins { at: 6, str: "Z", style: 0 } ];
+  assert(map_anchor(6, (ins_at[0]?)) == 6, "insert at the caret leaves it (typed text lands after)");
+  del_before: vector<Op> = []; del_before += [ Del { from: 1, to: 3 } ];
+  assert(map_anchor(6, (del_before[0]?)) == 4, "delete before the caret shifts it left (−2)");
+  del_after: vector<Op> = []; del_after += [ Del { from: 8, to: 10 } ];
+  assert(map_anchor(6, (del_after[0]?)) == 6, "delete after the caret leaves it");
+  del_span: vector<Op> = []; del_span += [ Del { from: 4, to: 9 } ];
+  assert(map_anchor(6, (del_span[0]?)) == 4, "delete spanning the caret collapses it to the deletion start");
+
+  // the caret stays attached to its logical position across a real edit
+  d = doc_from_text("hello world", 0);       // caret 6 = just before "world"
+  ops: vector<Op> = []; ops += [ Ins { at: 0, str: "AB", style: 0 } ];
+  t = txn_of(ops);
+  d2 = apply(d, t);
+  c2 = map_anchor_txn(6, t);
+  assert(c2 == 8, "through the txn, caret 6 → 8");
+  assert(materialise_range(d2, c2, c2 + 5) == "world", "…and still points just before 'world'");
+}
+
+// ============================ S3.5 single-letter typing, bounded recompute (I7 preview) ============================
+fn test_typing_bounded() {
+  // a many-line document; a single-char edit late in it must recompute only a bounded tail
+  base = "";
+  for k in 0..48 { base += "wd{k} "; }
+  d = doc_from_text(base, 0);
+  w = 12.0;
+  full = flow_layout_full(d, default_resolver, mono_measure, w);
+  total = len(full.boxes);
+  // type a letter near the END
+  d1 = insert_text(d, doc_len(d) - 2, "Z", 0);
+  rec_late = check_diff(d, d1, w, "type-late");
+  assert(rec_late * 6 < total, "a late keystroke recomputes only a small tail (rec={rec_late} ≪ total={total})");
+  // and stop-on-reconvergence bounds an edit in the MIDDLE too (not the whole tail after it)
+  d2 = insert_text(d, doc_len(d) / 2, "Q", 0);
+  rec_mid = check_diff(d, d2, w, "type-mid");
+  assert(rec_mid * 3 < total, "a mid-doc keystroke reconverges quickly (rec={rec_mid} ≪ total={total})");
+  println("lib: zttext — M3 incremental reflow OK (dirty · patch==full · caret map · bounded recompute)");
+}
+
+// ============================ S4.1 per-line heights, varied-style stacking ============================
+fn test_line_heights() {
+  d = doc_from_text("x y z", 0);
+  d = set_style(d, 2, 3, 1);   // "y" → style 1 (size 2 via demo_resolver: a TALLER line)
+  bs = flow_layout_full(d, demo_resolver, mono_measure, 1.0);   // W=1 → one word per line
+  assert(len(bs.boxes) == 3, "three single-word lines");
+  bx = bs.boxes[0]?;
+  assert((bx.ks == 0) && (bx.rect.y == 0.0) && (bx.rect.h == 1.0), "line 0 'x' at y=0, height 1");
+  by = bs.boxes[1]?;
+  assert((by.ks == 2) && (by.rect.y == 1.0) && (by.rect.h == 2.0), "line 1 'y' at y=1, height 2 (big style)");
+  bz = bs.boxes[2]?;
+  assert((bz.ks == 4) && (bz.rect.y == 3.0) && (bz.rect.h == 1.0), "line 2 'z' at y=3 (stacked below the tall line)");
+}
+
+// ============================ S4.2/S4.3 pagination + break-point index π + seek (I6) ============================
+fn test_pagination() {
+  d = doc_from_text("alpha beta gamma delta epsilon zeta", 0);   // 5 lines at W=10
+  w = 10.0;
+  layout = flow_layout_full(d, default_resolver, mono_measure, w);
+  assert(len(layout.lines) == 5, "5 laid-out lines");
+  pages = paginate(layout, 2.0);   // page height 2 → 3 pages ([0,2) [2,4) [4,5))
+  assert(len(pages) == 3, "5 lines at page height 2 → 3 pages");
+  p0 = pages[0]?; assert((p0.first_line == 0) && (p0.last_excl == 2), "page 0 = lines [0,2)");
+  p2 = pages[2]?; assert((p2.first_line == 4) && (p2.last_excl == 5), "page 2 = line 4 only");
+
+  // seek(2) reads π directly, O(1) — the first char of line 4
+  assert(seek_page_char(pages, 2) == (layout.lines[4]?).cs, "seek(2) = π(2) = first char of page 2 (O(1))");
+
+  // lay page 2 from scratch WITHOUT laying pages 0,1 — must equal the full layout's page 2
+  pg2 = layout_page(d, p2.first_char, p2.top_y, 2.0, default_resolver, mono_measure, w);
+  exp2: vector<Box> = [];
+  for i in 0..len(layout.boxes) { b = layout.boxes[i]?; if b.ks >= p2.first_char { exp2 += [b]; } }
+  assert(render_dump(BoxSet { boxes: exp2 }, d) == render_dump(BoxSet { boxes: pg2.boxes }, d), "layout_page(2) == full layout's page 2");
+
+  // the work is one page of lines, independent of N (I6): page 0 lays 2 lines, page 2 lays 1
+  pg0 = layout_page(d, p0.first_char, p0.top_y, 2.0, default_resolver, mono_measure, w);
+  assert((len(pg0.lines) == 2) && (len(pg2.lines) == 1), "each layout_page lays only its own page's lines (⟂ N)");
+}
+
+// ============================ S4.4 local π invalidation on edit ============================
+fn test_pagination_invalidation() {
+  d = doc_from_text("alpha beta gamma delta epsilon zeta", 0);
+  w = 10.0;
+  ph = 2.0;
+  pages = paginate(flow_layout_full(d, default_resolver, mono_measure, w), ph);
+  // edit LATE (inside the last word "zeta", char 33)
+  d2 = insert_text(d, 33, "X", 0);
+  pages2 = paginate(flow_layout_full(d2, default_resolver, mono_measure, w), ph);
+  p0 = pages[0]?; q0 = pages2[0]?;
+  assert((p0.first_char == q0.first_char) && (p0.top_y == q0.top_y) && (p0.first_line == q0.first_line) && (p0.last_excl == q0.last_excl),
+    "a late edit leaves page 0's π entry unchanged");
+  p1 = pages[1]?; q1 = pages2[1]?;
+  assert((p1.first_char == q1.first_char) && (p1.top_y == q1.top_y), "…and page 1's π entry unchanged (local invalidation)");
+}
+
+// ============================ S4.5 BiDi placement — the ψ reorder (completes BiDi, I4) ============================
+fn test_bidi_placement() {
+  d = doc_from_text("aa bb cc dd", 0);
+  d = set_style(d, 3, 8, 1);   // "bb cc" (incl. the space) → dir 1 (RTL run)
+  layout = flow_layout_full(d, rtl_resolver, mono_measure, 100.0);
+  assert(len(layout.boxes) == 7, "7 logical boxes on one line");
+  bidi = apply_bidi(layout, rtl_resolver);
+  // the RTL run reverses visually; κ stays logical
+  b2 = bidi.boxes[2]?; assert((b2.ks == 3) && (b2.rect.x == 6.0), "RTL 'bb' (κ[3,5)) reorders to visual x=6");
+  b4 = bidi.boxes[4]?; assert((b4.ks == 6) && (b4.rect.x == 3.0), "RTL 'cc' (κ[6,8)) reorders to visual x=3");
+  b0 = bidi.boxes[0]?; assert(b0.rect.x == 0.0, "LTR 'aa' keeps x=0");
+  b6 = bidi.boxes[6]?; assert(b6.rect.x == 9.0, "LTR 'dd' keeps x=9");
+  // Sel (S2.3) is STILL correct after the reorder — κ is untouched
+  sr = sel(BoxSet { boxes: bidi.boxes }, 3, 8);
+  assert((len(sr) == 3) && (sr[0]? == 2) && (sr[2]? == 4), "Sel [3,8) still returns the RTL boxes by κ after ψ");
+}
+
+// ============================ S4.6 justification (glue stretch) ============================
+fn test_justify() {
+  // A paragraph that wraps to two lines: the FIRST line (not last) justifies to W; the last
+  // line of the paragraph stays ragged (correct typography).
+  d = doc_from_text("aa bb cc dd", 0);
+  layout = flow_layout_full(d, default_resolver, mono_measure, 6.0);   // "aa bb" / "cc dd"
+  jl = justify(layout, d, 6.0).boxes;   // boxes: [0]aa [1]sp [2]bb (y0) [3]cc [4]sp [5]dd (y1)
+  b_bb = jl[2]?; assert((b_bb.rect.x + b_bb.rect.w) == 6.0, "line 0 (not last) justifies to exactly W=6");
+  g1 = jl[1]?; assert(g1.rect.w == 2.0, "its glue stretches 1 → 2");
+  b_dd = jl[5]?; assert((b_dd.rect.x + b_dd.rect.w) == 5.0, "the paragraph's LAST line stays ragged (natural 5, not justified)");
+  println("lib: zttext — M4 flow OK (line heights · pagination · seek π · BiDi placement · justify: last line ragged)");
+}
+
+// ============================ S4.7 user-directed hyphenation ([-] → soft hyphen) ============================
+fn test_hyphenation() {
+  // [-] ↔ U+00AD round-trip; the notation encodes to ONE invisible character
+  enc = encode_shy("hy[-]phen");
+  assert(len(enc) == 7, "'[-]' encodes to a single soft-hyphen char ('hy[-]phen' 9 → 7)");
+  assert(decode_shy(enc) == "hy[-]phen", "decode round-trips the soft hyphen back to [-]");
+  mid = 0;
+  ci = 0;
+  for c in enc { if ci == 2 { mid = c as integer; } ci += 1; }
+  assert(mid == 173, "the encoded break is U+00AD (SOFT HYPHEN), the portable form");
+
+  d = doc_from_text(enc, 0);   // "hy<shy>phen" — 7 chars
+  assert(len(materialise(d)) == 7, "the soft hyphen IS part of the portable logical text");
+
+  // WIDE column: invisible — no hyphen box, the two fragments sit adjacent (SHY zero-width)
+  wide = flow_layout(d, default_resolver, mono_measure, 100.0);
+  assert(len(wide.boxes) == 2, "wide column: two fragment boxes, the soft hyphen invisible");
+  w0 = wide.boxes[0]?; assert((w0.ks == 0) && (w0.ke == 2) && (w0.rect.x == 0.0) && (w0.rect.w == 2.0) && (!w0.hyphen), "'hy' at x=0");
+  w1 = wide.boxes[1]?; assert((w1.ks == 3) && (w1.ke == 7) && (w1.rect.x == 2.0) && (!w1.hyphen), "'phen' adjacent at x=2 (no gap, SHY zero-width)");
+
+  // NARROW column: the line breaks at the soft hyphen → a real hyphen glyph appears
+  narrow = flow_layout(d, default_resolver, mono_measure, 4.0);
+  assert(len(narrow.boxes) == 3, "narrow column: 'hy' + hyphen glyph + 'phen'");
+  n0 = narrow.boxes[0]?; assert((n0.ks == 0) && (n0.ke == 2) && (!n0.hyphen), "'hy' on line 0");
+  nh = narrow.boxes[1]?; assert(nh.hyphen && (nh.rect.x == 2.0) && (nh.rect.w == 1.0) && (nh.rect.y == 0.0), "a hyphen glyph at the line-0 break (x=2)");
+  n2 = narrow.boxes[2]?; assert((n2.ks == 3) && (n2.ke == 7) && (n2.rect.x == 0.0) && (n2.rect.y == 1.0) && (!n2.hyphen), "'phen' wraps to line 1");
+  assert(render_dump(narrow, d) == "[0.0,0.0,2.0,1.0] 0..2 s=0 'hy'\n[2.0,0.0,1.0,1.0] 2..3 s=0 '-'\n[0.0,1.0,4.0,1.0] 3..7 s=0 'phen'\n",
+    "the discretionary break renders '-' only when the line breaks there");
+
+  // double-click selects the WHOLE hyphenated word, across the soft hyphen
+  dt = doc_from_text(encode_shy("hy[-]phen tail"), 0);
+  wsel = word_at(dt, 4);
+  assert((wsel.0 == 0) && (wsel.1 == 7), "double-click selects the whole hyphenated word [0,7)");
+
+  // incremental reflow still equals a full relayout with a soft hyphen present (I5)
+  dh = doc_from_text(encode_shy("alpha be[-]ta gamma delta epsilon"), 0);
+  wc = 8.0;
+  lh0 = flow_layout_full(dh, default_resolver, mono_measure, wc);
+  eh = insert_text(dh, doc_len(dh) - 3, "X", 0);
+  ph = patch(lh0, dh, eh, default_resolver, mono_measure, wc);
+  assert(render_dump_layout(ph.layout, eh) == render_dump_layout(flow_layout_full(eh, default_resolver, mono_measure, wc), eh),
+    "patch == full relayout with a discretionary hyphen present (I5 holds)");
+  println("lib: zttext — S4.7 user-directed hyphenation OK ([-] ↔ U+00AD · invisible normally · hyphen on break · word/patch)");
+}
+
+// ============================ S5.1 work counters ============================
+fn test_work_counters() {
+  d = doc_from_text("alpha beta gamma", 0);
+  c = Counter { n: 0 };
+  cm = fn(s: text, st: Style) -> float { c.n += 1; return mono_measure(s, st); };
+  layout = flow_layout_full(d, default_resolver, cm, 100.0);
+  assert(len(layout.boxes) == 5, "layout produced 5 boxes (3 words + 2 glue)");
+  assert(c.n > 0, "the counting measurer recorded μ-calls (work counter live)");
+}
+
+// ============================ S5.2 keystroke cost ⟂ document size (I7) ============================
+fn test_keystroke_independent() {
+  w = 12.0;
+  tail = "the quick brown fox jumps";
+  small_base = repeat_word(20);    // 100 chars, ends on a line boundary
+  big_base = repeat_word(200);     // 1000 chars, same kind of boundary
+  ds = doc_from_text(small_base + tail, 0);
+  db = doc_from_text(big_base + tail, 0);
+  ls = flow_layout_full(ds, default_resolver, mono_measure, w);
+  lb = flow_layout_full(db, default_resolver, mono_measure, w);
+  // type a letter inside "quick" (identical tail, identical distance from the end)
+  ps = len(small_base) + 6;
+  pb = len(big_base) + 6;
+  cs = Counter { n: 0 };
+  ms = fn(s: text, st: Style) -> float { cs.n += 1; return mono_measure(s, st); };
+  cb = Counter { n: 0 };
+  mb = fn(s: text, st: Style) -> float { cb.n += 1; return mono_measure(s, st); };
+  prs = patch(ls, ds, insert_text(ds, ps, "Z", 0), default_resolver, ms, w);
+  prb = patch(lb, db, insert_text(db, pb, "Z", 0), default_resolver, mb, w);
+  assert(prs.recomputed == prb.recomputed, "keystroke reflow ⟂ doc size — same recomputed at 20 and 200 words (I7)");
+  assert(cs.n == cb.n, "keystroke μ-calls ⟂ doc size");
+  assert(prb.recomputed * 8 < len(lb.boxes), "…and the reflow is a small fraction of the big doc ({prb.recomputed} vs {len(lb.boxes)})");
+}
+
+// ============================ S5.3 viewport virtualisation ============================
+fn test_viewport() {
+  w = 12.0;
+  ph = 5.0;
+  ds = doc_from_text(repeat_word(40), 0);    // 20 lines
+  db = doc_from_text(repeat_word(400), 0);   // 200 lines
+  ls = flow_layout_full(ds, default_resolver, mono_measure, w);
+  lb = flow_layout_full(db, default_resolver, mono_measure, w);
+  ps = paginate(ls, ph);
+  pb = paginate(lb, ph);
+  // the same y-window [10,20) in both docs
+  vs = materialise_viewport(ds, ps, ph, 10.0, 20.0, default_resolver, mono_measure, w);
+  vb = materialise_viewport(db, pb, ph, 10.0, 20.0, default_resolver, mono_measure, w);
+  assert(len(vs.boxes) == len(vb.boxes), "a fixed viewport materialises the same box count regardless of doc size");
+  assert(len(vb.boxes) * 4 < len(lb.boxes), "…far fewer boxes than the whole big doc ({len(vb.boxes)} vs {len(lb.boxes)})");
+}
+
+// ============================ S5.4 incremental compaction (probe P3) ============================
+fn test_compaction() {
+  d = doc_from_text("abcdefghij", 0);
+  for k in 0..9 { d = set_style(d, k, k + 1, 0); }   // fragment into contiguous same-style pieces
+  before = piece_count(d);
+  assert(before > 3, "the doc is fragmented into many pieces ({before})");
+  // a bounded step merges at most `budget` and never changes the text
+  one = compact_step(d, 3);
+  assert(piece_count(one) >= before - 3, "one step merges at most `budget` pieces (bounded work)");
+  assert(materialise(one) == "abcdefghij", "a compaction step preserves ⌊D⌋");
+  // run to completion — coalesces to a single piece, text unchanged (probe P3)
+  cur = d;
+  guard = 0;
+  while guard < 100 {
+    nxt = compact_step(cur, 3);
+    if piece_count(nxt) == piece_count(cur) { cur = nxt; break; }
+    cur = nxt;
+    guard += 1;
+  }
+  assert(piece_count(cur) == 1, "full compaction coalesces the contiguous same-style pieces to 1");
+  assert(materialise(cur) == "abcdefghij", "…with ⌊D⌋ unchanged throughout (P3)");
+  println("lib: zttext — M5 strain OK (work counters · keystroke ⟂ size · viewport virtualisation · compaction)");
+}
+
+// ============================ Document page surface — multi-column flow ============================
+fn test_multicolumn() {
+  d = doc_from_text("a b c d e f", 0);   // 6 one-char words at char 0,2,4,6,8,10
+  g = PageGeom { width: 3.0, height: 2.0, margin_left: 0.0, margin_right: 0.0, margin_top: 0.0, margin_bottom: 0.0, columns: 2, gutter: 1.0 };
+  assert(column_width(g) == 1.0, "2 columns + 1 gutter in a width-3 content box → column width 1");
+  assert(column_height(g) == 2.0, "column height = page height 2");
+  layout = layout_columns(d, g, default_resolver, mono_measure);
+  assert(len(layout.boxes) == 6, "6 word boxes");
+  ba = layout.boxes[0]?; assert((ba.ks == 0) && (ba.rect.x == 0.0) && (ba.rect.y == 0.0), "'a' → col 0, top");
+  bb = layout.boxes[1]?; assert((bb.ks == 2) && (bb.rect.x == 0.0) && (bb.rect.y == 1.0), "'b' → col 0, line 2");
+  bc = layout.boxes[2]?; assert((bc.ks == 4) && (bc.rect.x == 2.0) && (bc.rect.y == 0.0), "'c' overflows to col 1 (x=2, y=0)");
+  bd = layout.boxes[3]?; assert((bd.ks == 6) && (bd.rect.x == 2.0) && (bd.rect.y == 1.0), "'d' → col 1, line 2");
+  be = layout.boxes[4]?; assert((be.ks == 8) && (be.rect.x == 0.0) && (be.rect.y == 2.0), "'e' overflows to page 2, col 0 (y=2)");
+  bf = layout.boxes[5]?; assert((bf.ks == 10) && (bf.rect.x == 0.0) && (bf.rect.y == 3.0), "'f' → page 2, line 2");
+  // Sel is geometry-free — works across columns unchanged (κ-intersection)
+  s = sel(BoxSet { boxes: layout.boxes }, 4, 7);
+  assert((len(s) == 2) && (s[0]? == 2) && (s[1]? == 3), "Sel [4,7) → 'c' and 'd', across the column boundary");
+  // hit-test finds boxes in the 2nd column and on the 2nd page
+  assert(box_at(BoxSet { boxes: layout.boxes }, 2.5, 0.5) == 2, "a point in column 1 hits 'c'");
+  assert(box_at(BoxSet { boxes: layout.boxes }, 0.5, 2.5) == 4, "a point on page 2 hits 'e'");
+  println("lib: zttext — multi-column page OK (column-major flow · absolute coords · Sel/hit-test across columns)");
+}
+
+// ============================ #2 fix — line/justify respect columns, not absolute y ============================
+fn test_multicolumn_lines() {
+  // Two columns' k-th lines share a y; line_boxes must not merge them.
+  d = doc_from_text("a b c d e f", 0);
+  g = PageGeom { width: 3.0, height: 2.0, margin_left: 0.0, margin_right: 0.0, margin_top: 0.0, margin_bottom: 0.0, columns: 2, gutter: 1.0 };
+  bs = BoxSet { boxes: layout_columns(d, g, default_resolver, mono_measure).boxes };
+  // boxes: [0]a(x0,y0) [1]b(x0,y1) [2]c(x2,y0) [3]d(x2,y1) [4]e(x0,y2) [5]f(x0,y3)
+  lb = line_boxes(bs, 0);   // anchor in 'a' (col 0, line 0, y=0)
+  assert((len(lb) == 1) && (lb[0]? == 0), "line_boxes('a') → only col-0's line, NOT the same-y 'c' in col 1");
+  lc = line_boxes(bs, 4);   // anchor in 'c' (col 1, line 0, same y=0)
+  assert((len(lc) == 1) && (lc[0]? == 2), "line_boxes('c') → only col-1's line (box 2), by reading-order run");
+
+  // justify per column: each non-last line fills to its OWN left + column_width, not x=0.
+  d2 = doc_from_text("aa bb cc dd ee ff gg hh", 0);   // col0: aa bb / cc dd ; col1: ee ff / gg hh
+  g2 = PageGeom { width: 14.0, height: 2.0, margin_left: 0.0, margin_right: 0.0, margin_top: 0.0, margin_bottom: 0.0, columns: 2, gutter: 2.0 };
+  assert(column_width(g2) == 6.0, "column width 6");
+  j = justify(layout_columns(d2, g2, default_resolver, mono_measure), d2, column_width(g2));
+  // boxes: [0]aa [1]sp [2]bb (col0 y0) … [6]ee [7]sp [8]ff (col1 y0) … [9]gg [10]sp [11]hh (col1 y1, LAST)
+  bb = j.boxes[2]?; assert((bb.rect.x + bb.rect.w) == 6.0, "col-0 line 0 justifies to right edge 6 (0 + width)");
+  ff = j.boxes[8]?; assert((ff.rect.x + ff.rect.w) == 14.0, "col-1 line 0 justifies to right edge 14 (its own left 8 + width), not against x=0");
+  hh = j.boxes[11]?; assert((hh.rect.x + hh.rect.w) == 13.0, "col-1's LAST line stays ragged (natural 13, not justified)");
+  println("lib: zttext — #2 fix OK (line_boxes + justify respect columns, not absolute y)");
+}
+
+// ============================ paragraphs — newline breaks, spacing, ragged last line ============================
+fn test_paragraphs() {
+  d = doc_from_text("one two\nthree four", 0);
+  // the newline segments as its OWN paragraph-break token, not glued into a word
+  toks = seg(d);
+  assert(len(toks) == 7, "one·sp·two·BREAK·three·sp·four = 7 tokens");
+  brk = toks[3]?; assert(brk.brk && (brk.ts == 7) && (brk.te == 8), "token 3 is the paragraph break [7,8)");
+
+  layout = flow_layout_full(d, default_resolver, mono_measure, 100.0, 2.0);   // para_gap = 2
+  assert(len(layout.lines) == 2, "two paragraphs → two lines");
+  l0 = layout.lines[0]?; assert((l0.y == 0.0) && l0.para_end, "paragraph 1 at y=0, marked paragraph-end (ragged)");
+  l1 = layout.lines[1]?; assert((l1.y == 3.0) && l1.para_end, "paragraph 2 at y=3 (line height 1 + para_gap 2)");
+  // the newline draws NO box; 'three' begins a fresh line
+  assert(len(layout.boxes) == 6, "6 boxes (3 per line); the newline is not drawn");
+  three = 0 - 1;
+  for i in 0..len(layout.boxes) { if (layout.boxes[i]?).ks == 8 { three = i; } }
+  bt = layout.boxes[three]?;
+  assert((bt.rect.x == 0.0) && (bt.rect.y == 3.0), "'three' begins paragraph 2 at (x=0, y=3)");
+  // the newline is still part of the portable logical text
+  assert(len(materialise(d)) == 18, "the newline is in ⌊D⌋ (portable content), just not drawn");
+
+  // no para_gap ⇒ paragraphs still break onto new lines, just with no extra gap
+  tight = flow_layout_full(d, default_resolver, mono_measure, 100.0);
+  assert((tight.lines[1]?).y == 1.0, "with para_gap 0, paragraph 2 sits at y=1 (still a fresh line)");
+  println("lib: zttext — paragraphs OK (newline → break · spacing · fresh line · ⌊D⌋ keeps the newline)");
+}
+
+// ============================ free_span — the steer-around-images primitive ============================
+fn test_free_span() {
+  none: vector<PlacedImage> = [];
+  f0 = free_span(0.0, 10.0, 0.0, 1.0, none);
+  assert((f0.0 == 0.0) && (f0.1 == 10.0) && (!f0.2), "no images → full width [0,10]");
+  li: vector<PlacedImage> = []; li += [ PlacedImage { x: 0.0, y: 0.0, w: 3.0, h: 2.0, id: 1 } ];
+  fl = free_span(0.0, 10.0, 0.0, 1.0, li);
+  assert((fl.0 == 3.0) && (fl.1 == 10.0) && (!fl.2), "left image → text free on [3,10]");
+  ri: vector<PlacedImage> = []; ri += [ PlacedImage { x: 7.0, y: 0.0, w: 3.0, h: 2.0, id: 1 } ];
+  fr = free_span(0.0, 10.0, 0.0, 1.0, ri);
+  assert((fr.0 == 0.0) && (fr.1 == 7.0) && (!fr.2), "right image → text free on [0,7]");
+  bi: vector<PlacedImage> = []; bi += [ PlacedImage { x: 0.0, y: 5.0, w: 3.0, h: 2.0, id: 1 } ];
+  fb = free_span(0.0, 10.0, 0.0, 1.0, bi);
+  assert((fb.0 == 0.0) && (fb.1 == 10.0) && (!fb.2), "image below the line's band → full width");
+  fi: vector<PlacedImage> = []; fi += [ PlacedImage { x: 0.0, y: 0.0, w: 10.0, h: 2.0, id: 1 } ];
+  ff = free_span(0.0, 10.0, 0.0, 1.0, fi);
+  assert(ff.2, "full-width image → blocked (flow drops below)");
+  assert(band_bottom(fi, 0.0, 1.0, 0.0, 10.0) == 2.0, "band_bottom drops to the obstruction's bottom (2)");
+  ti: vector<PlacedImage> = []; ti += [ PlacedImage { x: 0.0, y: 0.0, w: 2.0, h: 2.0, id: 1 } ]; ti += [ PlacedImage { x: 8.0, y: 0.0, w: 2.0, h: 2.0, id: 2 } ];
+  ft = free_span(0.0, 10.0, 0.0, 1.0, ti);
+  assert((ft.0 == 2.0) && (ft.1 == 8.0) && (!ft.2), "left+right images → text in the middle gap [2,8]");
+  println("lib: zttext — free_span OK (steer around left/right/full/two-sided image rects)");
+}
+
+// ============================ page image — text steers around a fixed rect ============================
+fn test_page_image() {
+  pg: vector<PlacedImage> = []; pg += [ PlacedImage { x: 0.0, y: 0.0, w: 4.0, h: 2.0, id: 7 } ];
+  nf: vector<FlowImage> = [];
+  d = doc_from_text("aa bb cc dd ee ff gg hh", 0);
+  L = layout_flow_images(d, 0.0, 10.0, 0.0, default_resolver, mono_measure, 0.0, 1.0, pg, nf);
+  assert((len(L.images) == 1) && ((L.images[0]?).id == 7), "the fixed page image is placed");
+  a0 = L.boxes[0]?;
+  assert((a0.ks == 0) && (a0.rect.x == 4.0) && (a0.rect.y == 0.0), "text steers right of the top-left image ('aa' at x=4)");
+  ee = 0 - 1;
+  for i in 0..len(L.boxes) { if (L.boxes[i]?).ks == 12 { ee = i; } }
+  be = L.boxes[ee]?;
+  assert((be.rect.x == 0.0) && (be.rect.y == 2.0), "below the image the text runs full width ('ee' at x=0, y=2)");
+  println("lib: zttext — page image OK (fixed rect; text steers around it, full width below)");
+}
+
+// ============================ in-text images — left-flow / full / right-flow ============================
+fn test_intext_images() {
+  nf: vector<PlacedImage> = [];
+  // FULL: a full-width block; text resumes below (narrow region so 'cc' starts the next line)
+  full: vector<FlowImage> = []; full += [ FlowImage { at: 6, mode: IMG_FULL, w: 0.0, h: 2.0, id: 1 } ];
+  lf = layout_flow_images(doc_from_text("aa bb cc dd", 0), 0.0, 6.0, 0.0, default_resolver, mono_measure, 0.0, 1.0, nf, full);
+  assert((len(lf.images) == 1) && ((lf.images[0]?).y == 1.0) && ((lf.images[0]?).w == 6.0), "IMG_FULL: full-width block placed at y=1");
+  cf = 0 - 1;
+  for i in 0..len(lf.boxes) { if (lf.boxes[i]?).ks == 6 { cf = i; } }
+  assert((lf.boxes[cf]?).rect.y == 3.0, "text resumes below the full block ('cc' at y=3)");
+
+  // LEFT: float left, text wraps to the right
+  lft: vector<FlowImage> = []; lft += [ FlowImage { at: 0, mode: IMG_LEFT, w: 3.0, h: 2.0, id: 2 } ];
+  ll = layout_flow_images(doc_from_text("aa bb cc dd ee ff", 0), 0.0, 10.0, 0.0, default_resolver, mono_measure, 0.0, 1.0, nf, lft);
+  assert(((ll.images[0]?).x == 0.0) && ((ll.images[0]?).w == 3.0), "IMG_LEFT: image floated at the left");
+  assert((ll.boxes[0]?).rect.x == 3.0, "text wraps to the right of a left-float ('aa' at x=3)");
+  el = 0 - 1;
+  for i in 0..len(ll.boxes) { if (ll.boxes[i]?).ks == 12 { el = i; } }
+  assert(((ll.boxes[el]?).rect.x == 0.0) && ((ll.boxes[el]?).rect.y == 2.0), "below the float text runs full width ('ee' at x=0, y=2)");
+
+  // RIGHT: float right, text stays on the left
+  rgt: vector<FlowImage> = []; rgt += [ FlowImage { at: 0, mode: IMG_RIGHT, w: 3.0, h: 2.0, id: 3 } ];
+  lr = layout_flow_images(doc_from_text("aa bb cc dd ee ff", 0), 0.0, 10.0, 0.0, default_resolver, mono_measure, 0.0, 1.0, nf, rgt);
+  assert((lr.images[0]?).x == 7.0, "IMG_RIGHT: image floated at the right (x=7)");
+  assert((lr.boxes[0]?).rect.x == 0.0, "text stays on the left of a right-float ('aa' at x=0)");
+  println("lib: zttext — in-text images OK (left-flow · full · right-flow)");
+}
+
+// find the text box with a given κ start (test helper).
+fn box_by_ks(boxes: vector<Box>, ks: integer) -> Box {
+  for i in 0..len(boxes) { b = boxes[i]?; if b.ks == ks { return b; } }
+  return Box { rect: Rect { x: 0.0 - 1.0, y: 0.0 - 1.0, w: 0.0, h: 0.0 }, ks: 0 - 1, ke: 0 - 1, style: 0 };
+}
+
+// ============================ multi-column page + images ============================
+fn test_page_columns() {
+  // 1. regression — with no images, layout_page_columns == layout_columns exactly
+  dr = doc_from_text("alpha beta gamma delta epsilon zeta eta theta", 0);
+  gr = PageGeom { width: 24.0, height: 8.0, margin_left: 2.0, margin_right: 2.0, margin_top: 2.0, margin_bottom: 2.0, columns: 2, gutter: 2.0 };
+  ni: vector<PlacedImage> = [];
+  nf: vector<FlowImage> = [];
+  assert(render_dump_layout(layout_columns(dr, gr, default_resolver, mono_measure), dr)
+      == render_dump_layout(layout_page_columns(dr, gr, ni, nf, default_resolver, mono_measure), dr),
+      "no-image layout_page_columns == layout_columns (no regression)");
+
+  g = PageGeom { width: 14.0, height: 4.0, margin_left: 0.0, margin_right: 0.0, margin_top: 0.0, margin_bottom: 0.0, columns: 2, gutter: 2.0 };
+
+  // 2. a PAGE image over column 0's top: column 0 steers around it; column 1 is unaffected
+  d = doc_from_text("aa bb cc dd ee ff gg hh ii jj kk ll", 0);
+  pg: vector<PlacedImage> = []; pg += [ PlacedImage { x: 0.0, y: 0.0, w: 3.0, h: 2.0, id: 5 } ];
+  lay = layout_page_columns(d, g, pg, nf, default_resolver, mono_measure);
+  assert((len(lay.images) == 1) && ((lay.images[0]?).id == 5), "the page image is placed");
+  aa = box_by_ks(lay.boxes, 0);  assert((aa.rect.x == 3.0) && (aa.rect.y == 0.0), "'aa' steers right of the column-0 page image (x=3)");
+  cc = box_by_ks(lay.boxes, 6);  assert((cc.rect.x == 0.0) && (cc.rect.y == 2.0), "below the image, column 0 runs full width ('cc' at 0,2)");
+  gg = box_by_ks(lay.boxes, 18); assert((gg.rect.x == 8.0) && (gg.rect.y == 0.0), "column 1 is unaffected by the column-0 image ('gg' at 8,0)");
+
+  // 3. an IN-TEXT left-float in column 0: column-0 text wraps; column 1 unaffected
+  d2 = doc_from_text("aa bb cc dd ee ff gg hh", 0);
+  fl: vector<FlowImage> = []; fl += [ FlowImage { at: 0, mode: IMG_LEFT, w: 3.0, h: 2.0, id: 9 } ];
+  lay2 = layout_page_columns(d2, g, ni, fl, default_resolver, mono_measure);
+  assert(((lay2.images[0]?).x == 0.0) && ((lay2.images[0]?).y == 0.0), "the in-text left-float lands in column 0");
+  a2 = box_by_ks(lay2.boxes, 0);  assert(a2.rect.x == 3.0, "column-0 text wraps to the right of the float");
+  g2 = box_by_ks(lay2.boxes, 18); assert((g2.rect.x == 8.0) && (g2.rect.y == 0.0), "column 1 is unaffected by the column-0 float");
+  println("lib: zttext — multi-column page + images OK (per-column steering; page image + in-text float)");
+}
+
+// ============================ sub-word selection (character-precise rects) ============================
+fn test_sel_rects() {
+  d = doc_from_text("hello world", 0);
+  bs = flow_layout(d, default_resolver, mono_measure, 100.0);   // hello[0,5]x0 · sp[5,6]x5 · world[6,11]x6
+  rr = sel_rects(bs, d, 2, 8, default_resolver, mono_measure);   // select mid-'hello' → mid-'world'
+  assert(len(rr) == 3, "a range spanning 3 boxes → 3 highlight rects");
+  r0 = rr[0]?; assert((r0.x == 2.0) && (r0.w == 3.0), "'hello' clipped to its selected chars [2,5): x=2 w=3, not the whole word");
+  r2 = rr[2]?; assert((r2.x == 6.0) && (r2.w == 2.0), "'world' clipped to [6,8): x=6 w=2");
+  rf = sel_rects(bs, d, 0, 5, default_resolver, mono_measure);
+  assert((len(rf) == 1) && ((rf[0]?).x == 0.0) && ((rf[0]?).w == 5.0), "a fully-selected word → its whole box rect");
+  assert(len(sel_rects(bs, d, 3, 3, default_resolver, mono_measure)) == 0, "an empty selection → no rects");
+  println("lib: zttext — sub-word selection OK (sel_rects clips partial boxes to the exact chars)");
+}
+
+// ============================ full-column justify (old-school last-line fill) ============================
+fn test_justify_last() {
+  d = doc_from_text("aa bb cc", 0);   // one line, natural width 8, in a 10-wide column
+  layout = flow_layout_full(d, default_resolver, mono_measure, 10.0);
+  jr = justify(layout, d, 10.0).boxes;              // default: last line ragged
+  lr = jr[len(jr) - 1]?; assert((lr.rect.x + lr.rect.w) == 8.0, "default: a paragraph's last line stays ragged (natural 8)");
+  jl = justify(layout, d, 10.0, true).boxes;        // justify_last: fill the full column
+  ll = jl[len(jl) - 1]?; assert((ll.rect.x + ll.rect.w) == 10.0, "justify_last (old-school): the last line fills the full column (W=10)");
+  println("lib: zttext — full-column justify OK (justify_last stretches even the last line)");
+}
+
+// ============================ justify respects an image edge (line.right) ============================
+fn test_justify_beside_image() {
+  d = doc_from_text("aa bb cc dd ee ff", 0);
+  rgt: vector<FlowImage> = []; rgt += [ FlowImage { at: 0, mode: IMG_RIGHT, w: 3.0, h: 2.0, id: 1 } ];
+  np: vector<PlacedImage> = [];
+  lay = layout_flow_images(d, 0.0, 10.0, 0.0, default_resolver, mono_measure, 0.0, 1.0, np, rgt);   // right-float at x=7
+  j = justify(lay, d, 10.0).boxes;   // line 0 is beside the image → its right edge is 7, not 10
+  bb = j[2]?;   // 'bb', last word on line 0 (y=0)
+  assert((bb.rect.x + bb.rect.w) == 7.0, "a line beside a right-float justifies to the image edge (7), not the full column (10)");
+  println("lib: zttext — justify-beside-image OK (fills to the free width, not into the image)");
+}
+
+// ============================ RenderSink: render_commands (golden, D2) ============================
+// The reusable engine sink protocol — LINE| per laid line, BOX| per glyph-box — must be exact and
+// backend-stable (it is what the browser DOM sink and the native/PDF sinks all paint from).
+fn test_render_commands_golden() {
+  d = doc_from_text("the quick brown fox\njumps over", 0);
+  l = flow_layout_full(d, default_resolver, mono_measure, 8.0);
+  exp = "LINE|0.00|1.00|8.00|0\nLINE|1.00|1.00|8.00|0\nLINE|2.00|1.00|8.00|0\nLINE|3.00|1.00|8.00|1\nLINE|4.00|1.00|8.00|0\nLINE|5.00|1.00|8.00|1\n"
+      + "BOX|0.00|0.00|3.00|1.00|0|the\nBOX|0.00|1.00|5.00|1.00|0|quick\nBOX|0.00|2.00|5.00|1.00|0|brown\nBOX|0.00|3.00|3.00|1.00|0|fox\nBOX|0.00|4.00|5.00|1.00|0|jumps\nBOX|0.00|5.00|4.00|1.00|0|over\n";
+  assert(render_commands(l, d) == exp, "render_commands matches the golden paint-command string (LINE + BOX)");
+}

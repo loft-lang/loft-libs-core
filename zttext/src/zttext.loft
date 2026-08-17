@@ -1,0 +1,1633 @@
+// zttext — the text engine as a loft library.
+//
+// One content substrate (an append-only buffer + a piece sequence) with a pluggable
+// per-surface layout behind an API layer of ports (Measurer, StyleResolver, Layout,
+// RenderSink, InteractionMap). It is the basis for the document editor now, and the
+// future IDE / slides / spreadsheet surfaces later — "switch the surface" means swap the
+// layout bundle, the content core is unchanged.
+//
+// Design: doc/EDITOR_DESIGN.md (direction) → doc/ZTTEXT_NOTATION.md (the formal model,
+// invariants I1–I9) → doc/ZTTEXT_PLAN.md (the M0–M5 build plan, ~37 small safe steps).
+// This file is that plan, made concrete. Everything here is pure Tier-1 loft with
+// measurement injected, so it is identical on interpret / native / native-wasm / browser
+// by construction (invariant I8, the parity theorem).
+//
+// Three loft traps designed out from step one: offsets are CHARACTER positions, never
+// bytes (the multi-byte truncation trap, @PLN110) — the buffer is a vector<character> so
+// every offset is a character index natively; the buffer is APPEND-ONLY (deleted text
+// stays, so undo can restore it); the piece vector is REBUILT, never element-swapped
+// (loft #338 in-place-swap loses records).
+
+// The library's own version marker — a scaffold anchor so the parity harness (interpret ==
+// native == native-wasm) exists before any engine logic lands.
+pub fn zttext_version() -> text { return "0.1.0-dev"; }
+
+// ===================================================================================
+// M0 — content core (Layer 1).   Notation §2, §3, §8.   Invariant I1 (fidelity + inverse).
+// ===================================================================================
+
+// A piece p = ⟨o, ℓ, s⟩ references the buffer span B[start, start+count) with style-id
+// `style`. Pieces are immutable value objects: an edit REBUILDS the piece sequence, it
+// never mutates a piece or swaps vector slots in place.
+pub struct Piece { start: integer, count: integer, style: integer }
+
+// The content model. `buf` is the append-only buffer B ∈ Σ* (a vector<character>, so
+// offsets are characters); `pieces` is the piece sequence D = ⟨p₁…pₙ⟩. The materialised
+// text ⌊D⌋ is the concatenation of each piece's buffer span. (Bundling B with D keeps the
+// engine's surface small; the buffer is treated as append-only within an edit.)
+pub struct Doc { buf: vector<character>, pieces: vector<Piece> }
+
+// A styled run: a maximal same-style character span. `slice_runs` returns these; they are
+// what an inverse Ins/Sty re-creates so undo restores styles, not just text.
+pub struct Run { str: text, style: integer }
+
+// -------------------- small helpers --------------------
+
+fn clampi(x: integer, lo: integer, hi: integer) -> integer {
+  if x < lo { return lo; }
+  if x > hi { return hi; }
+  return x;
+}
+
+// materialise the buffer span [start, start+count) as text (characters, never bytes).
+fn buf_slice_text(buf: vector<character>, start: integer, count: integer) -> text {
+  out: text = "";
+  for j in start..(start + count) { ch = buf[j]?; out += "{ch}"; }
+  return out;
+}
+
+pub fn empty_doc() -> Doc { return Doc { buf: [], pieces: [] }; }
+
+// build a one-piece doc holding `s` at style-id `style`.
+pub fn doc_from_text(s: text, style: integer) -> Doc {
+  b: vector<character> = [];
+  for c in s { b += [c]; }
+  p: vector<Piece> = [];
+  n = len(s);
+  if n > 0 { p += [ Piece { start: 0, count: n, style: style } ]; }
+  return Doc { buf: b, pieces: p };
+}
+
+// -------------------- S0.2 materialise + length --------------------
+
+// ⌊D⌋ — the logical text of the doc (concatenate every piece's buffer span in order).
+pub fn materialise(d: Doc) -> text {
+  out: text = "";
+  for i in 0..len(d.pieces) {
+    p = d.pieces[i]?;
+    out += buf_slice_text(d.buf, p.start, p.count);
+  }
+  return out;
+}
+
+// |⌊D⌋| — the character length of the logical text.
+pub fn doc_len(d: Doc) -> integer {
+  n = 0;
+  for i in 0..len(d.pieces) { n += (d.pieces[i]?).count; }
+  return n;
+}
+
+// -------------------- S0.3 locate + inverse --------------------
+
+// locate(D, a) → (piece index, in-piece offset). Anchor `a` ∈ [0,|⌊D⌋|] sits BETWEEN
+// characters; piece i covers logical [Cᵢ, Cᵢ+countᵢ). A boundary a = Cᵢ₊₁ lands in piece
+// i+1 at offset 0; a = |⌊D⌋| (the end) returns the sentinel (n_pieces, 0).
+pub fn locate(d: Doc, a: integer) -> (integer, integer) {
+  cum = 0;
+  for i in 0..len(d.pieces) {
+    p = d.pieces[i]?;
+    if a < cum + p.count { return (i, a - cum); }
+    cum += p.count;
+  }
+  return (len(d.pieces), 0);
+}
+
+// inverse of locate: (piece index, in-piece offset) → the logical anchor a.
+pub fn locate_inverse(d: Doc, pi: integer, ro: integer) -> integer {
+  cum = 0;
+  for i in 0..pi { cum += (d.pieces[i]?).count; }
+  return cum + ro;
+}
+
+// -------------------- S0.4 insert --------------------
+
+// insert text `s` (style-id `style`) at anchor `a`. Appends `s`'s characters to a fresh
+// buffer (append-only), then rebuilds the piece sequence splitting the piece at `a`.
+pub fn insert_text(d: Doc, a: integer, s: text, style: integer) -> Doc {
+  n = len(s);
+  if n == 0 { return d; }
+  // fresh buffer = copy of the old buffer, then the new characters appended at `base`.
+  nb: vector<character> = [];
+  for c0 in d.buf { nb += [c0]; }
+  base = len(nb);
+  for c1 in s { nb += [c1]; }
+  newp = Piece { start: base, count: n, style: style };
+
+  loc = locate(d, a);
+  pi = loc.0;
+  ro = loc.1;
+  np: vector<Piece> = [];
+  for i in 0..len(d.pieces) {
+    p = d.pieces[i]?;
+    if i == pi {
+      if ro > 0 { np += [ Piece { start: p.start, count: ro, style: p.style } ]; }
+      np += [newp];
+      if ro < p.count { np += [ Piece { start: p.start + ro, count: p.count - ro, style: p.style } ]; }
+    } else {
+      np += [p];
+    }
+  }
+  if pi >= len(d.pieces) { np += [newp]; }   // a == end (or empty doc): no piece was split
+  return Doc { buf: nb, pieces: np };
+}
+
+// -------------------- S0.5 delete --------------------
+
+// delete the range [a,b). Keeps each piece's portion outside [a,b); the buffer is
+// UNCHANGED (deleted characters stay in B so undo can restore them).
+pub fn delete_range(d: Doc, a: integer, b: integer) -> Doc {
+  if b <= a { return d; }
+  np: vector<Piece> = [];
+  cum = 0;
+  for i in 0..len(d.pieces) {
+    p = d.pieces[i]?;
+    ps = cum;
+    pe = cum + p.count;
+    // left kept fragment [ps, min(a,pe))
+    lend = if a < pe { a } else { pe };
+    if lend > ps { np += [ Piece { start: p.start, count: lend - ps, style: p.style } ]; }
+    // right kept fragment [max(b,ps), pe)
+    rstart = if b > ps { b } else { ps };
+    if pe > rstart { np += [ Piece { start: p.start + (rstart - ps), count: pe - rstart, style: p.style } ]; }
+    cum = pe;
+  }
+  return Doc { buf: d.buf, pieces: np };
+}
+
+// -------------------- S0.5b set style (the sty op's engine) --------------------
+
+// set style-id `style` on the range [a,b): split each overlapping piece three ways
+// ([ps,a) old · [a,b) new · [b,pe) old) and restyle the middle.
+pub fn set_style(d: Doc, a: integer, b: integer, style: integer) -> Doc {
+  if b <= a { return d; }
+  np: vector<Piece> = [];
+  cum = 0;
+  for i in 0..len(d.pieces) {
+    p = d.pieces[i]?;
+    ps = cum;
+    pe = cum + p.count;
+    m1 = clampi(a, ps, pe);
+    m2 = clampi(b, ps, pe);
+    if m1 > ps { np += [ Piece { start: p.start, count: m1 - ps, style: p.style } ]; }
+    if m2 > m1 { np += [ Piece { start: p.start + (m1 - ps), count: m2 - m1, style: style } ]; }
+    if pe > m2 { np += [ Piece { start: p.start + (m2 - ps), count: pe - m2, style: p.style } ]; }
+    cum = pe;
+  }
+  return Doc { buf: d.buf, pieces: np };
+}
+
+// -------------------- styled slices (used by undo) --------------------
+
+// the styled runs of [a,b): one Run per overlapping piece-fragment, carrying its text and
+// style. Concatenating the run texts is exactly ⌊D⌋[a,b); the styles are χ_D over [a,b).
+pub fn slice_runs(d: Doc, a: integer, b: integer) -> vector<Run> {
+  runs: vector<Run> = [];
+  if b <= a { return runs; }
+  cum = 0;
+  for i in 0..len(d.pieces) {
+    p = d.pieces[i]?;
+    ps = cum;
+    pe = cum + p.count;
+    lo = clampi(a, ps, pe);
+    hi = clampi(b, ps, pe);
+    if hi > lo {
+      s = buf_slice_text(d.buf, p.start + (lo - ps), hi - lo);
+      runs += [ Run { str: s, style: p.style } ];
+    }
+    cum = pe;
+  }
+  return runs;
+}
+
+// materialise just [a,b) as text.
+pub fn materialise_range(d: Doc, a: integer, b: integer) -> text {
+  out: text = "";
+  runs = slice_runs(d, a, b);
+  for i in 0..len(runs) { out += (runs[i]?).str; }
+  return out;
+}
+
+// per-character style vector over the whole doc (χ_D as a concrete list) — the reference
+// against which piece-blindness (I2) and undo are checked.
+pub fn char_styles(d: Doc) -> vector<integer> {
+  out: vector<integer> = [];
+  for i in 0..len(d.pieces) {
+    p = d.pieces[i]?;
+    for _j in 0..p.count { out += [p.style]; }
+  }
+  return out;
+}
+
+// -------------------- S0.6 transactions --------------------
+
+// The primitive edit operations (notation §8): ins(a,t,σ) · del(a,b) · sty(a,b,σ).
+pub enum Op {
+  Ins { at: integer, str: text, style: integer },
+  Del { from: integer, to: integer },
+  Sty { from: integer, to: integer, style: integer },
+}
+
+// A transaction τ — an atomic, ordered composition of primitive ops; the unit of undo.
+pub struct Txn { ops: vector<Op> }
+
+pub fn txn_of(ops: vector<Op>) -> Txn { return Txn { ops: ops }; }
+
+pub fn apply_op(d: Doc, op: Op) -> Doc {
+  if op is Ins { at, str, style } { return insert_text(d, at, str, style); }
+  if op is Del { from, to } { return delete_range(d, from, to); }
+  if op is Sty { from, to, style } { return set_style(d, from, to, style); }
+  return d;
+}
+
+// apply a whole transaction, left to right. Only the pre- and post-states are observable.
+pub fn apply(d: Doc, t: Txn) -> Doc {
+  cur = d;
+  for i in 0..len(t.ops) { cur = apply_op(cur, t.ops[i]?); }
+  return cur;
+}
+
+// -------------------- S0.7 invert / undo --------------------
+
+// the inverse of a single op against its PRE-state `pre`, as an ordered op list (a delete
+// or restyle over a multi-style range inverts to one op per style-run, so undo restores
+// styles exactly, not just text).
+pub fn inv_op_group(pre: Doc, op: Op) -> vector<Op> {
+  ops: vector<Op> = [];
+  if op is Ins { at, str } {
+    ops += [ Del { from: at, to: at + len(str) } ];
+    return ops;
+  }
+  if op is Del { from, to } {
+    runs = slice_runs(pre, from, to);
+    pos = from;
+    for r_del in runs {
+      ops += [ Ins { at: pos, str: r_del.str, style: r_del.style } ];
+      pos += len(r_del.str);
+    }
+    return ops;
+  }
+  if op is Sty { from, to } {
+    runs = slice_runs(pre, from, to);
+    pos = from;
+    for r_sty in runs {
+      ops += [ Sty { from: pos, to: pos + len(r_sty.str), style: r_sty.style } ];
+      pos += len(r_sty.str);
+    }
+    return ops;
+  }
+  return ops;
+}
+
+// invert(D, τ) → τ⁻¹ such that apply(apply(D,τ), τ⁻¹) ≈ D (same text + same per-char
+// styles). Each op's inverse is computed against its pre-state; the groups are emitted in
+// reverse op order (prepend each new group), since τ⁻¹ undoes the last op first.
+pub fn invert(d: Doc, t: Txn) -> Txn {
+  cur = d;
+  result: vector<Op> = [];
+  for i in 0..len(t.ops) {
+    op = t.ops[i]?;
+    g = inv_op_group(cur, op);
+    tmp: vector<Op> = [];
+    tmp += g;
+    tmp += result;
+    result = tmp;
+    cur = apply_op(cur, op);
+  }
+  return Txn { ops: result };
+}
+
+// ===================================================================================
+// S0.8 — the Measurer + Style + StyleResolver ports (fake monospace, deterministic).
+// ===================================================================================
+
+// A concrete style σ ∈ 𝕊. For the fake monospace measurer only `size` (per-character
+// advance) matters; `weight`/`italic`/`dir` (0 = LTR, 1 = RTL) round out the shape the
+// real backends will fill in. Layout reads styles ONLY through a StyleResolver, so a
+// surface restyles by swapping the resolver.
+pub struct Style { size: float, weight: integer, italic: boolean, dir: integer }
+
+pub fn default_style() -> Style { return Style { size: 1.0, weight: 0, italic: false, dir: 0 }; }
+
+// The fake monospace Measurer μ: advance width = character-count × style.size. Pure and
+// deterministic, so every layout milestone is headless and parity-testable. The Measurer
+// PORT type is `fn(text, Style) -> float`; this is one implementation (a named ref you
+// pass where a Measurer is expected).
+pub fn mono_measure(s: text, st: Style) -> float { return (len(s) as float) * st.size; }
+
+// A trivial StyleResolver ρ: every id resolves to the default style. The port type is
+// `fn(integer) -> Style`; a real surface passes its own (document stylesheet · IDE syntax
+// theme · cell format).
+pub fn default_resolver(_id: integer) -> Style { return default_style(); }
+
+// The fake box height of a run in style `st`. Real backends give ascent+descent; the fake
+// uses square cells (height = size) so line stacking is deterministic and hand-checkable.
+pub fn run_height(st: Style) -> float { return st.size; }
+
+// ===================================================================================
+// M1 — render a text in a column (Layer 2).   Notation §4, §6.   Invariants I2, I3.
+// ===================================================================================
+
+// The render IR (notation §4). A Rect is a plane rectangle; a Box β = ⟨rect, κ, style⟩
+// carries the LOGICAL content-ref κ = [ks, ke) (character span in ⌊D⌋) and a single style.
+// The rect's position is the VISUAL order; κ is the LOGICAL order — both explicit in every
+// box, which is the whole BiDi story (a selection is κ-intersection, geometry-free).
+pub struct Rect { x: float, y: float, w: float, h: float }
+// `hyphen` marks a synthetic line-end hyphen glyph (from a discretionary break, S4.7):
+// it renders "-" rather than its κ text, and κ points at the soft-hyphen it stands in for.
+pub struct Box  { rect: Rect, ks: integer, ke: integer, style: integer, hyphen: boolean = false }
+pub struct BoxSet { boxes: vector<Box> }
+
+// A laid-out visual line: the logical char span [cs,ce) its boxes cover, its top y and its
+// height. `para_end` is true when this is a paragraph's LAST line (ended at a hard break or
+// the doc end) — it is left ragged (justify skips it). `right` is the line's available right
+// edge (the column edge, or an image's edge for a line beside one) — the target justify fills
+// to. Carried by a Layout so incremental reflow can find the lines an edit touches (M3).
+pub struct LaidLine { cs: integer, ce: integer, y: float, h: float, para_end: boolean = false, right: float = 0.0 }
+
+// A placed image on the page: its rectangle + the image reference `id` (a file_record id at
+// the app layer). It is BOTH a rendered element AND an exclusion region the text steers around.
+pub struct PlacedImage { x: float, y: float, w: float, h: float, id: integer }
+
+// A full layout result: the text boxes (the render IR), per-line metadata (the seam
+// incremental reflow needs), and the placed images (rendered separately; text never overlaps
+// them). `flow_layout` returns just the BoxSet; `flow_layout_full` returns this.
+pub struct Layout { boxes: vector<Box>, lines: vector<LaidLine>, images: vector<PlacedImage> }
+
+// -------------------- S1.2 segmentation into words and glue --------------------
+
+// A token in the stream: a word (non-space run), glue (a space run), a discretionary break
+// (`disc`, a soft hyphen), or a paragraph break (`brk`, a newline run). `word`/`disc`/`brk`
+// are the kind flags; all false → glue. Glue is the breakable inter-word space; disc is a
+// zero-width in-WORD break (S4.7); brk is a HARD break that ends the line and starts a new
+// paragraph (a paragraph's last line is ragged, and gets paragraph spacing after it).
+pub struct Token { word: boolean, ts: integer, te: integer, disc: boolean = false, brk: boolean = false }
+
+fn is_space(c: character) -> boolean { return c == ' '; }
+fn is_nl(c: character) -> boolean { return (c as integer) == 10; }   // '\n' — a paragraph break
+
+// -------------------- user-directed hyphenation (S4.7) --------------------
+
+// The canonical discretionary-hyphen character: Unicode SOFT HYPHEN U+00AD (UTF-8 0xC2 0xAD).
+// It is the PORTABLE storage form — invisible in any conforming Markdown/HTML pipeline, and
+// rendered as a hyphen only when a line breaks at it. The `[-]` authoring notation maps to it.
+pub fn soft_hyphen() -> text { return text_from_bytes([0xC2 as u8, 0xAD as u8]); }
+
+fn is_shy(c: character) -> boolean { return (c as integer) == 173; }
+
+// encode the `[-]` authoring notation → the canonical soft hyphen (import / editor-input path).
+pub fn encode_shy(s: text) -> text {
+  shy = soft_hyphen();
+  out: text = "";
+  cs: vector<character> = [];
+  for c in s { cs += [c]; }
+  n = len(cs);
+  i = 0;
+  while i < n {
+    if ((i + 2) < n) && (cs[i]? == '[') && (cs[i + 1]? == '-') && (cs[i + 2]? == ']') {
+      out += shy;
+      i += 3;
+    } else {
+      ch = cs[i]?;
+      out += "{ch}";
+      i += 1;
+    }
+  }
+  return out;
+}
+
+// decode the canonical soft hyphen → the `[-]` notation (editor source-view / round-trip).
+pub fn decode_shy(s: text) -> text {
+  out: text = "";
+  for c in s {
+    if is_shy(c) { out += "[-]"; } else { out += "{c}"; }
+  }
+  return out;
+}
+
+// seg(⌊D⌋) → the token stream T of words ω, glue δ, and discretionary breaks (soft hyphens).
+// A soft hyphen becomes its own zero-width Disc token; words are maximal non-space,
+// non-soft-hyphen runs, so every inter-token boundary is a legal break (space or hyphen).
+pub fn seg(d: Doc) -> vector<Token> {
+  toks: vector<Token> = [];
+  s = materialise(d);
+  cs: vector<character> = [];
+  for c in s { cs += [c]; }
+  n = len(cs);
+  i = 0;
+  while i < n {
+    ch = cs[i]?;
+    if is_shy(ch) {
+      toks += [ Token { word: false, ts: i, te: i + 1, disc: true } ];
+      i += 1;
+    } else if is_nl(ch) {
+      seg_start = i;
+      while (i < n) && is_nl(cs[i]?) { i += 1; }   // a run of newlines is ONE paragraph break
+      toks += [ Token { word: false, ts: seg_start, te: i, brk: true } ];
+    } else if is_space(ch) {
+      seg_start = i;
+      while (i < n) && is_space(cs[i]?) { i += 1; }
+      toks += [ Token { word: false, ts: seg_start, te: i } ];
+    } else {
+      seg_start = i;
+      while (i < n) && (!is_space(cs[i]?)) && (!is_shy(cs[i]?)) && (!is_nl(cs[i]?)) { i += 1; }
+      toks += [ Token { word: true, ts: seg_start, te: i } ];
+    }
+  }
+  return toks;
+}
+
+// -------------------- S1.3 token width via the Measurer --------------------
+
+// ν(t) — the measured advance of a token: the sum over its style-runs of μ(run, ρ(style)).
+// (A token may cross a style boundary; each run measures under its own resolved style.)
+pub fn token_width(d: Doc, tok: Token, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> float {
+  if tok.disc { return 0.0; }   // a discretionary break has no width unless the line breaks at it
+  w = 0.0;
+  runs = slice_runs(d, tok.ts, tok.te);
+  for i in 0..len(runs) {
+    r = runs[i]?;
+    w += measure(r.str, resolve(r.style));
+  }
+  return w;
+}
+
+// -------------------- S1.4 greedy line breaking (the brk recurrence) --------------------
+
+// A laid-out line: the half-open token range [first, last_excl). Trailing glue at a break
+// is NOT included (notation §6: "trailing glue on a line is dropped").
+pub struct Line { first: integer, last_excl: integer }
+
+// greedy line breaking (notation §6, brk): pack words while they fit in width W; interior
+// glue counts toward the width, trailing glue is deferred and dropped at a break. The first
+// word on a line always fits (an over-wide word overflows onto its own line, no infinite loop).
+pub fn lines_greedy(d: Doc, toks: vector<Token>, w_col: float, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> vector<Line> {
+  lns: vector<Line> = [];
+  ls = 0;              // current line's start token index
+  last_word_end = 0;   // token index just past the last word committed to the current line
+  acc = 0.0;           // committed width on the current line (words + interior glue)
+  pending = 0.0;       // glue width seen but not yet committed (only counts if a word follows)
+  line_has_word = false;
+  i = 0;
+  while i < len(toks) {
+    tok = toks[i]?;
+    wtok = token_width(d, tok, resolve, measure);
+    if tok.word {
+      if !line_has_word {
+        acc = wtok;
+        last_word_end = i + 1;
+        line_has_word = true;
+        i += 1;
+      } else if (acc + pending + wtok) <= w_col {
+        acc += pending + wtok;
+        pending = 0.0;
+        last_word_end = i + 1;
+        i += 1;
+      } else {
+        lns += [ Line { first: ls, last_excl: last_word_end } ];
+        ls = i;
+        acc = 0.0;
+        pending = 0.0;
+        line_has_word = false;
+        // do NOT advance i — reprocess this word as the first on the new line
+      }
+    } else {
+      pending += wtok;
+      i += 1;
+    }
+  }
+  if last_word_end > ls { lns += [ Line { first: ls, last_excl: last_word_end } ]; }
+  return lns;
+}
+
+// -------------------- S1.5 flow layout → BoxSet (I3) --------------------
+
+// Break ONE line greedily starting at token `from` → (last_excl, next_tok, hyphen_disc,
+// para_break): the line covers tokens [from, last_excl); the next line starts at `next_tok`;
+// hyphen_disc is the token index of a soft hyphen the line broke a word at (a trailing hyphen
+// glyph), else -1; para_break is true when the line ended at a HARD paragraph break (which is
+// consumed — `next_tok` is past it). The per-line step both the full layout and the patch reuse.
+pub fn next_line(d: Doc, toks: vector<Token>, from: integer, w_col: float, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> (integer, integer, integer, boolean) {
+  i = from;
+  acc = 0.0;
+  pending = 0.0;
+  line_has_word = false;
+  last_word_end = from;
+  while i < len(toks) {
+    tok = toks[i]?;
+    if tok.brk {
+      return (last_word_end, i + 1, 0 - 1, true);   // hard break ends the line; consume it
+    }
+    wtok = token_width(d, tok, resolve, measure);
+    if tok.word {
+      if !line_has_word {
+        acc = wtok;
+        last_word_end = i + 1;
+        line_has_word = true;
+        i += 1;
+      } else if (acc + pending + wtok) <= w_col {
+        acc += pending + wtok;
+        pending = 0.0;
+        last_word_end = i + 1;
+        i += 1;
+      } else {
+        hy = 0 - 1;
+        if (i > 0) && ((toks[i - 1]?).disc) { hy = i - 1; }   // broke a word at a soft hyphen
+        return (last_word_end, i, hy, false);
+      }
+    } else {
+      pending += wtok;   // glue or disc; disc adds 0 (see token_width)
+      i += 1;
+    }
+  }
+  return (last_word_end, i, 0 - 1, false);
+}
+
+// A placed line: its boxes plus its LaidLine metadata.
+pub struct PlacedLine { boxes: vector<Box>, line: LaidLine }
+
+// Place tokens [first, last_excl) at top y — one box per style-run, x-advance left to right;
+// the shared placement primitive so the full layout and a patched tail are byte-identical. If
+// `hyphen_disc >= 0`, append a trailing hyphen glyph box for that soft hyphen (S4.7).
+pub fn place_line(d: Doc, toks: vector<Token>, first: integer, last_excl: integer, hyphen_disc: integer, para_end: boolean, y: float, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> PlacedLine {
+  lh = 0.0;
+  for ti in first..last_excl {
+    tok = toks[ti]?;
+    if !tok.disc {   // a discretionary break is zero-width and boxless unless broken at
+      hruns = slice_runs(d, tok.ts, tok.te);
+      for ri in 0..len(hruns) {
+        hh = run_height(resolve((hruns[ri]?).style));
+        if hh > lh { lh = hh; }
+      }
+    }
+  }
+  boxes: vector<Box> = [];
+  x = 0.0;
+  line_cs = 0 - 1;
+  line_ce = 0 - 1;
+  for tj in first..last_excl {
+    tok2 = toks[tj]?;
+    if !tok2.disc {
+      pruns = slice_runs(d, tok2.ts, tok2.te);
+      roff = tok2.ts;
+      for rj in 0..len(pruns) {
+        r = pruns[rj]?;
+        st = resolve(r.style);
+        rw = measure(r.str, st);
+        rh = run_height(st);
+        if line_cs < 0 { line_cs = roff; }
+        boxes += [ Box { rect: Rect { x: x, y: y, w: rw, h: rh }, ks: roff, ke: roff + len(r.str), style: r.style } ];
+        line_ce = roff + len(r.str);
+        x += rw;
+        roff += len(r.str);
+      }
+    }
+  }
+  // trailing hyphen from a discretionary break: renders "-", κ points at the soft hyphen
+  if hyphen_disc >= 0 {
+    disc = toks[hyphen_disc]?;
+    druns = slice_runs(d, disc.ts, disc.te);
+    hstyle = if len(druns) > 0 { (druns[0]?).style } else { 0 };
+    hst = resolve(hstyle);
+    hw = measure("-", hst);
+    hh2 = run_height(hst);
+    if hh2 > lh { lh = hh2; }
+    boxes += [ Box { rect: Rect { x: x, y: y, w: hw, h: hh2 }, ks: disc.ts, ke: disc.te, style: hstyle, hyphen: true } ];
+    line_ce = disc.te;
+    x += hw;
+  }
+  return PlacedLine { boxes: boxes, line: LaidLine { cs: line_cs, ce: line_ce, y: y, h: lh, para_end: para_end } };
+}
+
+// Lay out a TOKEN LIST (absolute char spans) from top y0 — the whole-doc layout, built as a
+// sequence of next_line + place_line steps (the exact steps an incremental patch reuses).
+pub fn layout_tokens_from(d: Doc, toks: vector<Token>, y0: float, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float, para_gap: float = 0.0) -> Layout {
+  boxes: vector<Box> = [];
+  lines: vector<LaidLine> = [];
+  y = y0;
+  cur = 0;
+  while cur < len(toks) {
+    nl = next_line(d, toks, cur, w_col, resolve, measure);
+    last_excl = nl.0;
+    next_tok = nl.1;
+    para = nl.3;
+    if last_excl > cur {
+      pe = para || (next_tok >= len(toks));   // last line of a paragraph or the doc — ragged
+      pl = place_line(d, toks, cur, last_excl, nl.2, pe, y, resolve, measure);
+      for bi in 0..len(pl.boxes) { boxes += [ pl.boxes[bi]? ]; }
+      lines += [ LaidLine { cs: pl.line.cs, ce: pl.line.ce, y: pl.line.y, h: pl.line.h, para_end: pl.line.para_end, right: w_col } ];
+      y += pl.line.h;
+      if para { y += para_gap; }
+    } else if para {
+      y += para_gap;   // a standalone/leading break contributes a blank paragraph gap
+    }
+    cur = next_tok;
+  }
+  return Layout { boxes: boxes, lines: lines };
+}
+
+// L for the flow surface: content + resolver + measurer + column width → a full Layout.
+// `para_gap` is the extra vertical space after each paragraph (0 = paragraphs still break onto
+// new lines, just with no gap).
+pub fn flow_layout_full(d: Doc, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float, para_gap: float = 0.0) -> Layout {
+  return layout_tokens_from(d, seg(d), 0.0, resolve, measure, w_col, para_gap);
+}
+
+// The BoxSet-only view of a flow layout (the M1/M2 surface).
+pub fn flow_layout(d: Doc, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float) -> BoxSet {
+  return BoxSet { boxes: flow_layout_full(d, resolve, measure, w_col).boxes };
+}
+
+// D1 (EDITOR_DESIGN step D) — the LINE ASSIGNMENT: the per-line logical char spans [cs,ce) a
+// document breaks into (each with its y/height, its justify edge `right`, and whether it is a
+// paragraph's ragged last line). It is a PURE function of (content, styles, metrics, column), and
+// it is the layer the determinism budget lives at (§8.22): common word widths ⇒ identical breaks ⇒
+// identical assignment on every platform. This is what a screen RenderSink paints one element PER
+// (step D2), and what the loft-native PDF emitter (step E) paginates from — both downstream of, and
+// agreeing because of, this one assignment. Materialise a line's text with
+// `materialise_range(d, cs, ce)`.
+pub fn line_assignment(d: Doc, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float) -> vector<LaidLine> {
+  // Bind the whole Layout to a LOCAL before returning its `.lines`: `return f().lines` would hand
+  // back a heap vector aliasing an unbound temporary, which a later store-allocating call in the
+  // caller (e.g. materialise_range) transiently clobbers to length 0 (LOFT_WORRIES footgun).
+  layout = flow_layout_full(d, resolve, measure, w_col);
+  return layout.lines;
+}
+
+// -------------------- S1.6 headless RenderSink (deterministic dump) --------------------
+
+// A headless RenderSink R: a deterministic textual dump of the BoxSet, one line per box —
+// `[x,y,w,h] ks..ke s=style 'text'`. Golden-string comparable; the eyeball/regression view
+// that stands in for a real DOM/Canvas/PDF sink (which is a Tier-2 backend, swapped at the
+// browser edge). Coordinates are printed to one decimal so the string is backend-stable.
+pub fn render_dump(bs: BoxSet, d: Doc) -> text {
+  out: text = "";
+  for i in 0..len(bs.boxes) {
+    b = bs.boxes[i]?;
+    r = b.rect;
+    txt = if b.hyphen { "-" } else { materialise_range(d, b.ks, b.ke) };
+    out += "[{r.x:0.1},{r.y:0.1},{r.w:0.1},{r.h:0.1}] {b.ks}..{b.ke} s={b.style} '{txt}'\n";
+  }
+  return out;
+}
+
+// The DOM/Canvas RenderSink R : 𝔅 → paint commands — the reusable engine-level sink PROTOCOL. A
+// thin per-target host (browser host.js / native / PDF) paints these; loft owns every coordinate
+// (§8.22), so the geometry is identical on every reader and the host only positions boxes it is
+// handed. One `LINE|y|h|right|paraEnd` per laid line (the justified line assignment, D2) then one
+// `BOX|x|y|w|h|style|text` per glyph-box (CSS px, 2 decimals so the string is backend-stable). This
+// is CONTENT-ONLY: caret/selection overlays are a consumer concern layered on top (cf. ztedit's
+// `ed_render`, which adds SCALE/DOC/CARET/SEL around this same LINE/BOX core), so any read surface —
+// viewer, editor, print preview — reuses it unchanged. Takes a full Layout (lines + boxes).
+pub fn render_commands(l: Layout, d: Doc) -> text {
+  out: text = "";
+  for i in 0..len(l.lines) {
+    ln = l.lines[i]?;
+    pe = if ln.para_end { 1 } else { 0 };
+    out += "LINE|{ln.y:0.2}|{ln.h:0.2}|{ln.right:0.2}|{pe}\n";
+  }
+  for i in 0..len(l.boxes) {
+    b = l.boxes[i]?; r = b.rect;
+    t = if b.hyphen { "-" } else { materialise_range(d, b.ks, b.ke) };
+    out += "BOX|{r.x:0.2}|{r.y:0.2}|{r.w:0.2}|{r.h:0.2}|{b.style}|{t}\n";
+  }
+  return out;
+}
+
+// The total laid-out height (sum of line heights) — the column's content height.
+pub fn boxset_height(bs: BoxSet) -> float {
+  h = 0.0;
+  for i in 0..len(bs.boxes) {
+    b = bs.boxes[i]?;
+    bot = b.rect.y + b.rect.h;
+    if bot > h { h = bot; }
+  }
+  return h;
+}
+
+// ===================================================================================
+// M2 — select words / lines.   Notation §7.   Invariant I4 (selection = κ-intersection).
+// ===================================================================================
+
+fn fabs(v: float) -> float { if v < 0.0 { return 0.0 - v; } return v; }
+
+// the first k characters of s (character-safe prefix, for hit-test refinement).
+fn text_take(s: text, k: integer) -> text {
+  if k <= 0 { return ""; }
+  out: text = "";
+  taken = 0;
+  for c in s {
+    if taken >= k { return out; }
+    out += "{c}";
+    taken += 1;
+  }
+  return out;
+}
+
+// -------------------- S2.1 hit-test: point → box --------------------
+
+// box_at(𝔅, x, y) → the index of the box CONTAINING (x,y) (half-open rect), or -1 if the
+// point is in no box (a margin / gap — anchor_at then falls back to the nearest box).
+pub fn box_at(bs: BoxSet, x: float, y: float) -> integer {
+  for i in 0..len(bs.boxes) {
+    b = bs.boxes[i]?;
+    r = b.rect;
+    if (x >= r.x) && (x < r.x + r.w) && (y >= r.y) && (y < r.y + r.h) { return i; }
+  }
+  return 0 - 1;
+}
+
+// the index of the box nearest (x,y): vertical distance dominates (so a click in a margin
+// snaps to the right LINE first), then horizontal. Used when the point is in no box.
+fn nearest_box(bs: BoxSet, x: float, y: float) -> integer {
+  best = 0 - 1;
+  best_d = 0.0;
+  for i in 0..len(bs.boxes) {
+    b = bs.boxes[i]?;
+    r = b.rect;
+    cx = if x < r.x { r.x } else { if x > r.x + r.w { r.x + r.w } else { x } };
+    cy = if y < r.y { r.y } else { if y > r.y + r.h { r.y + r.h } else { y } };
+    dd = fabs(y - cy) * 1000000.0 + fabs(x - cx);
+    if (best < 0) || (dd < best_d) { best = i; best_d = dd; }
+  }
+  return best;
+}
+
+// -------------------- S2.2 hit-test: point → logical anchor (I4) --------------------
+
+// H(q, 𝔅) — the logical anchor for a point: pick the box (containing, else nearest), then
+// refine x WITHIN the box by finding the character split whose prefix width is closest to
+// the local x (via μ, so it is correct for proportional fonts, not just monospace).
+// (RTL refinement, where the prefix mapping reverses, is completed with BiDi placement in
+// S4.5; this LTR refinement is exact for the flow surface.)
+pub fn anchor_at(bs: BoxSet, d: Doc, x: float, y: float, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> integer {
+  bi = box_at(bs, x, y);
+  if bi < 0 { bi = nearest_box(bs, x, y); }
+  if bi < 0 { return 0; }
+  b = bs.boxes[bi]?;
+  local = x - b.rect.x;
+  runtext = materialise_range(d, b.ks, b.ke);
+  st = resolve(b.style);
+  nlen = b.ke - b.ks;
+  best_k = 0;
+  best_d = fabs(local);
+  for k in 0..=nlen {
+    pw = measure(text_take(runtext, k), st);
+    dd = fabs(local - pw);
+    if dd < best_d { best_d = dd; best_k = k; }
+  }
+  return b.ks + best_k;
+}
+
+// -------------------- S2.3 selection = κ-intersection (I4) --------------------
+
+// Sel(a,b) = { β : κ(β) ∩ [a,b) ≠ ∅ } — the boxes a logical selection [a,b) covers, returned
+// as box indices. Defined PURELY by κ-intersection: it never mentions geometry, so a range
+// crossing a direction boundary yields the correct (possibly visually-split) box set with no
+// special-case code. THIS is the whole BiDi selection story.
+pub fn sel(bs: BoxSet, a: integer, b: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  if b <= a { return out; }   // a zero-width (caret) selection covers no boxes
+  for i in 0..len(bs.boxes) {
+    box = bs.boxes[i]?;
+    if (box.ks < b) && (a < box.ke) { out += [i]; }
+  }
+  return out;
+}
+
+// Sel(a,b) as precise highlight RECTANGLES — character-granular. Each box the range covers is
+// CLIPPED to its selected sub-span [max(a,ks), min(b,ke)), the endpoints mapped to x within the
+// box via μ. So a partially-selected word highlights only the selected characters, not the whole
+// word (`sel` returns whole boxes; this returns the sub-rects to paint). A fully-selected box
+// yields its whole rect; the boundary boxes are the fine ones.
+pub fn sel_rects(bs: BoxSet, d: Doc, a: integer, b: integer, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> vector<Rect> {
+  out: vector<Rect> = [];
+  if b <= a { return out; }
+  for i in 0..len(bs.boxes) {
+    box = bs.boxes[i]?;
+    if (box.ks < b) && (a < box.ke) {
+      lo = if a > box.ks { a } else { box.ks };
+      hi = if b < box.ke { b } else { box.ke };
+      st = resolve(box.style);
+      runtext = materialise_range(d, box.ks, box.ke);
+      x_lo = box.rect.x + measure(text_take(runtext, lo - box.ks), st);
+      x_hi = box.rect.x + measure(text_take(runtext, hi - box.ks), st);
+      out += [ Rect { x: x_lo, y: box.rect.y, w: x_hi - x_lo, h: box.rect.h } ];
+    }
+  }
+  return out;
+}
+
+// -------------------- S2.4 word / line semantics --------------------
+
+// caret_at(a) — the caret rectangle (zero width) for logical anchor a: the x is refined within
+// the box holding a (a==ke → the box's right edge; a==ks → its left), y/h from that box. The
+// dual of anchor_at (point → anchor); this is anchor → point, for drawing the cursor.
+pub fn caret_at(bs: BoxSet, d: Doc, a: integer, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> Rect {
+  for i in 0..len(bs.boxes) {
+    box = bs.boxes[i]?;
+    if (box.ks <= a) && (a < box.ke) {
+      runtext = materialise_range(d, box.ks, box.ke);
+      cx = box.rect.x + measure(text_take(runtext, a - box.ks), resolve(box.style));
+      return Rect { x: cx, y: box.rect.y, w: 0.0, h: box.rect.h };
+    }
+  }
+  // a at a box's trailing edge (end of doc, or before a dropped space)
+  found = false;
+  fx = 0.0;
+  fy = 0.0;
+  fh = 1.0;
+  for i in 0..len(bs.boxes) {
+    box = bs.boxes[i]?;
+    if box.ke == a { fx = box.rect.x + box.rect.w; fy = box.rect.y; fh = box.rect.h; found = true; }
+  }
+  if found { return Rect { x: fx, y: fy, w: 0.0, h: fh }; }
+  if len(bs.boxes) > 0 {
+    lb = bs.boxes[len(bs.boxes) - 1]?;
+    return Rect { x: lb.rect.x + lb.rect.w, y: lb.rect.y, w: 0.0, h: lb.rect.h };
+  }
+  return Rect { x: 0.0, y: 0.0, w: 0.0, h: 1.0 };
+}
+
+// word(a) — the [ts,te) span of the word containing anchor a (what a double-click selects). A
+// discretionary break does NOT end a word, so a hyphenated word selects whole: expand across
+// adjacent word/disc tokens, stopping at glue. a in whitespace returns that glue run.
+pub fn word_at(d: Doc, a: integer) -> (integer, integer) {
+  toks = seg(d);
+  idx = 0 - 1;
+  for i in 0..len(toks) {
+    t = toks[i]?;
+    if (a >= t.ts) && (a < t.te) { idx = i; }
+  }
+  if idx < 0 {
+    if len(toks) > 0 { last = toks[len(toks) - 1]?; return (last.ts, last.te); }
+    return (a, a);
+  }
+  hit = toks[idx]?;
+  if (!hit.word) && (!hit.disc) { return (hit.ts, hit.te); }   // glue → that run
+  lo_i = idx;
+  while (lo_i > 0) && (((toks[lo_i - 1]?).word) || ((toks[lo_i - 1]?).disc)) { lo_i -= 1; }
+  hi_i = idx;
+  while ((hi_i + 1) < len(toks)) && (((toks[hi_i + 1]?).word) || ((toks[hi_i + 1]?).disc)) { hi_i += 1; }
+  return ((toks[lo_i]?).ts, (toks[hi_i]?).te);
+}
+
+// line(a) — the box indices on the VISUAL line containing anchor a. A visual line is the
+// maximal run of boxes sharing box@a's y that is CONTIGUOUS in reading order — not every box
+// at that y. This matters for multi-column pages: column 1's line 3 and column 2's line 3
+// have the same absolute y, but they are laid out in reading order (all of column 1, then
+// column 2), so a same-y run stays within one column. (A degenerate page with columns only
+// one line tall would put two columns' first lines adjacent at the same y; real pages are
+// taller, and layout_columns emits boxes column-major, so the run boundary is exact.)
+pub fn line_boxes(bs: BoxSet, a: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  m = len(bs.boxes);
+  if m == 0 { return out; }
+  hit = 0 - 1;
+  for i in 0..m {
+    b = bs.boxes[i]?;
+    if (b.ks <= a) && (a < b.ke) { hit = i; }
+  }
+  if hit < 0 { hit = m - 1; }
+  yline = (bs.boxes[hit]?).rect.y;
+  lo = hit;
+  while (lo > 0) && ((bs.boxes[lo - 1]?).rect.y == yline) { lo -= 1; }
+  hi = hit;
+  while ((hi + 1) < m) && ((bs.boxes[hi + 1]?).rect.y == yline) { hi += 1; }
+  for j in lo..(hi + 1) { out += [j]; }
+  return out;
+}
+
+// ===================================================================================
+// M3 — diverse edits → incremental reflow.   Notation §8.   Invariant I5 (incremental==full).
+// ===================================================================================
+
+fn imin(a: integer, b: integer) -> integer { if a < b { return a; } return b; }
+
+// the doc's logical text as a character vector (for the styled-string diff).
+pub fn doc_chars(d: Doc) -> vector<character> {
+  out: vector<character> = [];
+  s = materialise(d);
+  for c in s { out += [c]; }
+  return out;
+}
+
+// -------------------- S3.2 dirty range --------------------
+
+// dirty(D, D′) → (lo, hi_old, hi_new): the minimal changed span, computed by diffing the
+// STYLED string (char AND style per position) — common prefix `lo`, common suffix trimmed.
+// old[lo,hi_old) was replaced by new[lo,hi_new); the net char change is hi_new - hi_old.
+// Diffing the observable styled string (not τ's op structure) gives the tightest range and
+// makes patch independent of HOW the edit was expressed.
+pub fn dirty(old_d: Doc, new_d: Doc) -> (integer, integer, integer) {
+  oc = doc_chars(old_d);   ostyle = char_styles(old_d);
+  nc = doc_chars(new_d);   nstyle = char_styles(new_d);
+  lo_len = len(oc);
+  hi_len = len(nc);
+  mn = imin(lo_len, hi_len);
+  lo = 0;
+  while (lo < mn) && (oc[lo]? == nc[lo]?) && ((ostyle[lo]?) == (nstyle[lo]?)) { lo += 1; }
+  su = 0;
+  while (su < (mn - lo)) && (oc[lo_len - 1 - su]? == nc[hi_len - 1 - su]?) && ((ostyle[lo_len - 1 - su]?) == (nstyle[hi_len - 1 - su]?)) { su += 1; }
+  return (lo, lo_len - su, hi_len - su);
+}
+
+// -------------------- S3.3 incremental patch (I5) --------------------
+
+// The result of an incremental relayout: the new Layout, plus how many boxes were RECOMPUTED
+// (the tail) vs REUSED from the old layout (the prefix). The counts are the bounded-work
+// evidence M5 asserts; the layout is what M3's differential checks against a full relayout.
+pub struct PatchResult { layout: Layout, recomputed: integer, reused: integer }
+
+fn full_patch(new_d: Doc, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float) -> PatchResult {
+  fl = flow_layout_full(new_d, resolve, measure, w_col);
+  return PatchResult { layout: fl, recomputed: len(fl.boxes), reused: 0 };
+}
+
+// patch(L(D), D, D′) → a Layout EQUAL to L(D′) (the differential law I5), computed
+// incrementally and with BOUNDED re-measurement (I7): reuse every line strictly before the
+// edit verbatim, re-lay lines from there only until the break structure RECONVERGES with the
+// old layout, then TRANSLATE the untouched tail (a cheap char+y shift, no re-measure).
+//
+// Two correctness hinges:
+//  · start one line EARLIER than the line containing the edit — that earlier line's content
+//    is entirely before the edit, so the break INTO it is fixed; re-laying from there catches
+//    a "backward join" (a shrunk word rising onto the previous line);
+//  · reconvergence — once a re-laid line ends at a new-doc char `nsc` past the dirty region
+//    and some OLD line starts at `nsc − delta`, the token streams from there are identical
+//    (shifted by delta), so the greedy produces identical lines: reuse the old tail, shifted.
+// First-line / before-all edits fall back to a full relayout (still trivially I5-correct).
+pub fn patch(old_layout: Layout, old_doc: Doc, new_doc: Doc, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float) -> PatchResult {
+  dd = dirty(old_doc, new_doc);
+  lo = dd.0;
+  hi_old = dd.1;
+  hi_new = dd.2;
+  if (lo == hi_old) && (lo == hi_new) {
+    return PatchResult { layout: old_layout, recomputed: 0, reused: len(old_layout.boxes) };
+  }
+  if len(old_layout.lines) == 0 { return full_patch(new_doc, resolve, measure, w_col); }
+  delta = hi_new - hi_old;
+
+  // C = last old line starting at or before the edit; start one line earlier.
+  cix = 0 - 1;
+  for i in 0..len(old_layout.lines) {
+    ln = old_layout.lines[i]?;
+    if (ln.cs >= 0) && (ln.cs <= lo) { cix = i; }
+  }
+  if cix < 0 { return full_patch(new_doc, resolve, measure, w_col); }
+  lstart = cix - 1;
+  if lstart < 0 { lstart = 0; }
+  sline = old_layout.lines[lstart]?;
+  start_char = sline.cs;
+  start_y = sline.y;
+  if start_char <= 0 { return full_patch(new_doc, resolve, measure, w_col); }
+
+  // start_char must be exactly a token (word) boundary in the unchanged prefix.
+  ntoks = seg(new_doc);
+  ti0 = 0 - 1;
+  for i in 0..len(ntoks) {
+    if (ntoks[i]?).ts >= start_char { ti0 = i; break; }
+  }
+  if (ti0 < 0) || ((ntoks[ti0]?).ts != start_char) { return full_patch(new_doc, resolve, measure, w_col); }
+
+  // reused prefix: old boxes/lines strictly before start_char
+  out_boxes: vector<Box> = [];
+  for i in 0..len(old_layout.boxes) {
+    b = old_layout.boxes[i]?;
+    if b.ke <= start_char { out_boxes += [b]; }
+  }
+  out_lines: vector<LaidLine> = [];
+  for i in 0..lstart { out_lines += [ old_layout.lines[i]? ]; }
+
+  // re-lay lines from ti0, stopping at reconvergence
+  recomputed = 0;
+  cur = ti0;
+  y = start_y;
+  converged = false;
+  conv_old_line = 0 - 1;
+  conv_y = 0.0;
+  while cur < len(ntoks) {
+    nl = next_line(new_doc, ntoks, cur, w_col, resolve, measure);
+    last_excl = nl.0;
+    next_tok = nl.1;
+    if last_excl > cur {
+      pe = nl.3 || (next_tok >= len(ntoks));
+      pl = place_line(new_doc, ntoks, cur, last_excl, nl.2, pe, y, resolve, measure);
+      for bi in 0..len(pl.boxes) { out_boxes += [ pl.boxes[bi]? ]; recomputed += 1; }
+      out_lines += [ LaidLine { cs: pl.line.cs, ce: pl.line.ce, y: pl.line.y, h: pl.line.h, para_end: pl.line.para_end, right: w_col } ];
+      y += pl.line.h;
+    }
+    cur = next_tok;
+    if cur < len(ntoks) {
+      nsc = (ntoks[cur]?).ts;
+      if nsc > hi_new {
+        for k in 0..len(old_layout.lines) {
+          ol = old_layout.lines[k]?;
+          if ol.cs == (nsc - delta) { conv_old_line = k; }
+        }
+        if conv_old_line >= 0 { converged = true; conv_y = y; }
+      }
+    }
+    if converged { break; }
+  }
+
+  // translate the untouched old tail (boxes/lines from the reconvergence line), shifted by
+  // (delta chars, conv_y − old_y) — a pure shift, NOT a re-measure.
+  if converged {
+    olj = old_layout.lines[conv_old_line]?;
+    ydelta = conv_y - olj.y;
+    for i in 0..len(old_layout.boxes) {
+      b = old_layout.boxes[i]?;
+      if b.ks >= olj.cs {
+        out_boxes += [ Box { rect: Rect { x: b.rect.x, y: b.rect.y + ydelta, w: b.rect.w, h: b.rect.h }, ks: b.ks + delta, ke: b.ke + delta, style: b.style, hyphen: b.hyphen } ];
+      }
+    }
+    for k in conv_old_line..len(old_layout.lines) {
+      ol = old_layout.lines[k]?;
+      out_lines += [ LaidLine { cs: ol.cs + delta, ce: ol.ce + delta, y: ol.y + ydelta, h: ol.h, para_end: ol.para_end, right: ol.right } ];
+    }
+  }
+
+  return PatchResult { layout: Layout { boxes: out_boxes, lines: out_lines }, recomputed: recomputed, reused: len(out_boxes) - recomputed };
+}
+
+// The BoxSet dump of a Layout (for golden/differential comparison).
+pub fn render_dump_layout(l: Layout, d: Doc) -> text { return render_dump(BoxSet { boxes: l.boxes }, d); }
+
+// -------------------- S3.4 caret maps through a transaction --------------------
+
+// map_anchor(a, op) — where a caret at logical anchor a lands after op. Insert strictly
+// before a shifts it right (a stays attached to the same following text); insert at/after a
+// leaves it (typed text lands after the caret). Delete before a shifts it left; delete after
+// a leaves it; delete spanning a collapses it to the deletion start. Style ops don't move it.
+pub fn map_anchor(a: integer, op: Op) -> integer {
+  if op is Ins { at, str } {
+    if at < a { return a + len(str); }
+    return a;
+  }
+  if op is Del { from, to } {
+    if a <= from { return a; }
+    if a >= to { return a - (to - from); }
+    return from;
+  }
+  return a;
+}
+
+// map a caret through a whole transaction (op by op, left to right).
+pub fn map_anchor_txn(a: integer, t: Txn) -> integer {
+  cur = a;
+  for i in 0..len(t.ops) { cur = map_anchor(cur, t.ops[i]?); }
+  return cur;
+}
+
+// ===================================================================================
+// M4 — make it flow correctly.   Notation §6.   Invariant I6 (seek via π, not O(N)).
+// ===================================================================================
+
+// -------------------- S4.2 pagination + S4.3 the break-point index π --------------------
+
+// A page: the line range [first_line, last_excl) it holds, plus the char and y at which it
+// starts (its π entry — enough to lay the page out from scratch without the pages before it).
+pub struct Page { first_line: integer, last_excl: integer, first_char: integer, top_y: float }
+
+// paginate a laid-out column: lines stack onto a page until the next line would exceed
+// page_h, then a new page begins. The first line of a page always fits (even if taller than
+// page_h). The page list IS the break-point index π (each Page.first_char = π(n)).
+pub fn paginate(layout: Layout, page_h: float) -> vector<Page> {
+  pages: vector<Page> = [];
+  n = len(layout.lines);
+  first_line = 0;
+  used = 0.0;
+  for i in 0..n {
+    ln = layout.lines[i]?;
+    if (i > first_line) && ((used + ln.h) > page_h) {
+      fl = layout.lines[first_line]?;
+      pages += [ Page { first_line: first_line, last_excl: i, first_char: fl.cs, top_y: fl.y } ];
+      first_line = i;
+      used = 0.0;
+    }
+    used += ln.h;
+  }
+  if n > first_line {
+    fl2 = layout.lines[first_line]?;
+    pages += [ Page { first_line: first_line, last_excl: n, first_char: fl2.cs, top_y: fl2.y } ];
+  }
+  return pages;
+}
+
+// seek(N) — the first CHARACTER of page N, read directly from π in O(1) (no laying out of
+// pages 1..N−1). Pairs with layout_page to render page N from scratch (I6).
+pub fn seek_page_char(pages: vector<Page>, n: integer) -> integer {
+  if (n < 0) || (n >= len(pages)) { return 0 - 1; }
+  return (pages[n]?).first_char;
+}
+
+// Lay out ONE page directly from a page-start (its first_char + top_y) — the same stop rule
+// paginate uses, so it reproduces exactly that page's lines. This is "seek to page N without
+// laying out 1..N−1": the work is one page of lines, independent of N (I6).
+pub fn layout_page(d: Doc, start_char: integer, y0: float, page_h: float, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float) -> Layout {
+  toks = seg(d);
+  ti0 = 0;
+  for i in 0..len(toks) {
+    if (toks[i]?).ts >= start_char { ti0 = i; break; }
+  }
+  boxes: vector<Box> = [];
+  lines: vector<LaidLine> = [];
+  y = y0;
+  used = 0.0;
+  cur = ti0;
+  while cur < len(toks) {
+    nl = next_line(d, toks, cur, w_col, resolve, measure);
+    last_excl = nl.0;
+    next_tok = nl.1;
+    if last_excl > cur {
+      pe = nl.3 || (next_tok >= len(toks));
+      pl = place_line(d, toks, cur, last_excl, nl.2, pe, y, resolve, measure);
+      if (used > 0.0) && ((used + pl.line.h) > page_h) { return Layout { boxes: boxes, lines: lines }; }
+      for bi in 0..len(pl.boxes) { boxes += [ pl.boxes[bi]? ]; }
+      lines += [ LaidLine { cs: pl.line.cs, ce: pl.line.ce, y: pl.line.y, h: pl.line.h, para_end: pl.line.para_end, right: w_col } ];
+      y += pl.line.h;
+      used += pl.line.h;
+    }
+    cur = next_tok;
+  }
+  return Layout { boxes: boxes, lines: lines };
+}
+
+// -------------------- S4.5 BiDi placement — the ψ reorder within a line --------------------
+
+// Apply the UAX-9 L2 reorder (LTR/RTL subset) to a laid-out column: within each visual line,
+// each maximal run of RTL boxes (resolved dir == 1) has its VISUAL order reversed — the boxes
+// keep their logical κ, only their x changes. So x follows ψ while κ follows logical, and any
+// κ-based operation (Sel, hit-test) is unaffected. Base direction is LTR (the flow surface).
+pub fn apply_bidi(layout: Layout, resolve: fn(integer) -> Style) -> Layout {
+  boxes = layout.boxes;
+  m = len(boxes);
+  out: vector<Box> = [];
+  for i in 0..m { out += [ boxes[i]? ]; }
+  gi = 0;
+  while gi < m {
+    y0 = (boxes[gi]?).rect.y;
+    gj = gi;
+    while (gj < m) && ((boxes[gj]?).rect.y == y0) { gj += 1; }   // visual line group [gi, gj)
+    p = gi;
+    while p < gj {
+      if resolve((boxes[p]?).style).dir == 1 {
+        q = p;
+        while (q < gj) && (resolve((boxes[q]?).style).dir == 1) { q += 1; }   // RTL run [p,q)
+        cx = (boxes[p]?).rect.x;   // the run's left edge stays fixed; fill it in reverse
+        for k in rev(p..q) {
+          b = boxes[k]?;
+          out[k] = Box { rect: Rect { x: cx, y: b.rect.y, w: b.rect.w, h: b.rect.h }, ks: b.ks, ke: b.ke, style: b.style, hyphen: b.hyphen };
+          cx += b.rect.w;
+        }
+        p = q;
+      } else {
+        p += 1;
+      }
+    }
+    gi = gj;
+  }
+  return Layout { boxes: out, lines: layout.lines };
+}
+
+// -------------------- S4.6 justification (glue stretch) --------------------
+
+// true if the box covers only spaces (stretchable glue).
+fn box_is_glue(d: Doc, b: Box) -> boolean {
+  s = materialise_range(d, b.ks, b.ke);
+  if len(s) == 0 { return false; }
+  for c in s { if c != ' ' { return false; } }
+  return true;
+}
+
+// the laid-out line whose first box starts at char `cs` (matched by cs so it is robust even
+// where two columns share a y). Returns a default LaidLine if not found.
+fn group_line(lines: vector<LaidLine>, cs: integer) -> LaidLine {
+  for k in 0..len(lines) {
+    l = lines[k]?;
+    if l.cs == cs { return l; }
+  }
+  return LaidLine { cs: 0 - 1, ce: 0 - 1, y: 0.0, h: 0.0 };
+}
+
+// Justify each visual line by distributing its leftover space equally across its glue boxes
+// (widen each, shift the rest right). The target right edge is the line's OWN available right
+// (`LaidLine.right`) — the column edge, or an image's edge for a line beside one — so it works
+// per column AND beside images (falls back to line_left + w_col for a hand-built layout). A
+// paragraph's LAST line stays ragged UNLESS `justify_last` (the old-school "fill every line"
+// look). Overfull or glue-less lines are left as-is. (Per-glue stretch/shrink BOUNDS are a
+// refinement; this distributes equally.)
+pub fn justify(layout: Layout, d: Doc, w_col: float, justify_last: boolean = false) -> Layout {
+  boxes = layout.boxes;
+  m = len(boxes);
+  out: vector<Box> = [];
+  for i in 0..m { out += [ boxes[i]? ]; }
+  gi = 0;
+  while gi < m {
+    y0 = (boxes[gi]?).rect.y;
+    gj = gi;
+    while (gj < m) && ((boxes[gj]?).rect.y == y0) { gj += 1; }   // line group [gi, gj)
+    line_left = (boxes[gi]?).rect.x;
+    ln = group_line(layout.lines, (boxes[gi]?).ks);
+    target = if ln.right > 0.0 { ln.right } else { line_left + w_col };
+    last = boxes[gj - 1]?;
+    natural = last.rect.x + last.rect.w;
+    slack = target - natural;
+    gc = 0;
+    for k in gi..gj { if box_is_glue(d, boxes[k]?) { gc += 1; } }
+    if (slack > 0.0) && (gc > 0) && (justify_last || (!ln.para_end)) {
+      add = slack / (gc as float) ?? 0.0;   // gc > 0 here, so never null; the ?? just discharges float?
+      shift = 0.0;
+      for k in gi..gj {
+        b = boxes[k]?;
+        is_glue = box_is_glue(d, b);
+        neww = if is_glue { b.rect.w + add } else { b.rect.w };
+        out[k] = Box { rect: Rect { x: b.rect.x + shift, y: b.rect.y, w: neww, h: b.rect.h }, ks: b.ks, ke: b.ke, style: b.style, hyphen: b.hyphen };
+        if is_glue { shift += add; }
+      }
+    }
+    gi = gj;
+  }
+  return Layout { boxes: out, lines: layout.lines };
+}
+
+// ===================================================================================
+// M5 — performance / strain.   Notation §8.   Invariant I7 (bounded work ⟂ |D|).
+// ===================================================================================
+
+// -------------------- S5.3 viewport virtualisation --------------------
+
+// Materialise only the pages overlapping the vertical window [y_top, y_bottom) — the boxes a
+// viewport (plus its page margin) actually shows. Each page is re-laid from its π entry, so
+// the materialised box count tracks the VIEWPORT, not the document (I7): a 10× larger doc
+// with the same viewport materialises the same boxes.
+pub fn materialise_viewport(d: Doc, pages: vector<Page>, page_h: float, y_top: float, y_bottom: float, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float) -> Layout {
+  boxes: vector<Box> = [];
+  lines: vector<LaidLine> = [];
+  for i in 0..len(pages) {
+    p = pages[i]?;
+    p_top = p.top_y;
+    p_bot = p.top_y + page_h;
+    if (p_top < y_bottom) && (p_bot > y_top) {
+      pg = layout_page(d, p.first_char, p.top_y, page_h, resolve, measure, w_col);
+      for bi in 0..len(pg.boxes) { boxes += [ pg.boxes[bi]? ]; }
+      for li in 0..len(pg.lines) { lines += [ pg.lines[li]? ]; }
+    }
+  }
+  return Layout { boxes: boxes, lines: lines };
+}
+
+// -------------------- S5.4 incremental compaction (probe P3) --------------------
+
+pub fn piece_count(d: Doc) -> integer { return len(d.pieces); }
+
+// Coalesce up to `budget` adjacent piece pairs that reference a CONTIGUOUS buffer span with
+// the SAME style (edits fragment the piece vector; those fragments often become mergeable
+// again). Bounded per call (≤ budget merges) so it is interruptible — run it repeatedly in
+// idle time. ⌊D⌋ is unchanged (a pure storage-layer coalesce), which is probe P3.
+pub fn compact_step(d: Doc, budget: integer) -> Doc {
+  np: vector<Piece> = [];
+  merges = 0;
+  for i in 0..len(d.pieces) {
+    p = d.pieces[i]?;
+    merged = false;
+    if (len(np) > 0) && (merges < budget) {
+      li = len(np) - 1;
+      last = np[li]?;
+      if ((last.start + last.count) == p.start) && (last.style == p.style) {
+        np[li] = Piece { start: last.start, count: last.count + p.count, style: last.style };
+        merges += 1;
+        merged = true;
+      }
+    }
+    if !merged { np += [ p ]; }
+  }
+  return Doc { buf: d.buf, pieces: np };
+}
+
+// ===================================================================================
+// Document page surface — multi-column page flow.   Composes M1–M4 into a real page.
+// ===================================================================================
+
+// Page geometry: the physical page, its margins, and its column grid. Column width is
+// derived so `columns` equal columns plus `gutter` gaps exactly fill the content box.
+pub struct PageGeom {
+  width: float, height: float,
+  margin_left: float, margin_right: float, margin_top: float, margin_bottom: float,
+  columns: integer, gutter: float,
+  para_gap: float = 0.0,   // extra vertical space after each paragraph
+}
+
+// the width of one column: (content width − the inter-column gutters) / columns.
+pub fn column_width(g: PageGeom) -> float {
+  content = g.width - g.margin_left - g.margin_right;
+  gaps = ((g.columns - 1) as float) * g.gutter;
+  return (content - gaps) / (g.columns as float) ?? content;
+}
+// the usable height of a column (page height minus top/bottom margins).
+pub fn column_height(g: PageGeom) -> float { return g.height - g.margin_top - g.margin_bottom; }
+
+// Lay text out over a multi-column page grid in ABSOLUTE canvas coordinates (pages stacked
+// downward, columns side by side within a page). Lines are broken at the column width and
+// stacked down a column; when a line would overflow the column, flow moves to the next
+// column, then to column 0 of the next page. Reuses next_line + place_line, so styles,
+// per-run boxes, and discretionary hyphenation all carry over unchanged; the produced boxes
+// feed Sel / hit-test / render directly. (Incremental multi-column reflow is a follow-on;
+// an edit currently re-runs this full flow, which is fine at document scale.)
+pub fn layout_columns(d: Doc, g: PageGeom, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> Layout {
+  toks = seg(d);
+  cw = column_width(g);
+  ch = column_height(g);
+  boxes: vector<Box> = [];
+  lines: vector<LaidLine> = [];
+  page = 0;
+  col = 0;
+  y_local = 0.0;
+  cur = 0;
+  while cur < len(toks) {
+    nl = next_line(d, toks, cur, cw, resolve, measure);
+    last_excl = nl.0;
+    next_tok = nl.1;
+    para = nl.3;
+    if last_excl > cur {
+      pe = para || (next_tok >= len(toks));
+      pl = place_line(d, toks, cur, last_excl, nl.2, pe, 0.0, resolve, measure);   // column-local y = 0
+      lh = pl.line.h;
+      // column break: this line overflows the current (non-empty) column
+      if (y_local > 0.0) && ((y_local + lh) > ch) {
+        col += 1;
+        if col >= g.columns { page += 1; col = 0; }
+        y_local = 0.0;
+      }
+      ox = g.margin_left + (col as float) * (cw + g.gutter);
+      oy = (page as float) * g.height + g.margin_top + y_local;
+      for bi in 0..len(pl.boxes) {
+        b = pl.boxes[bi]?;
+        boxes += [ Box { rect: Rect { x: b.rect.x + ox, y: b.rect.y + oy, w: b.rect.w, h: b.rect.h }, ks: b.ks, ke: b.ke, style: b.style, hyphen: b.hyphen } ];
+      }
+      lines += [ LaidLine { cs: pl.line.cs, ce: pl.line.ce, y: pl.line.y + oy, h: lh, para_end: pl.line.para_end, right: ox + cw } ];
+      y_local += lh;
+      if para { y_local += g.para_gap; }
+    } else if para {
+      y_local += g.para_gap;
+    }
+    cur = next_tok;
+  }
+  return Layout { boxes: boxes, lines: lines };
+}
+
+// ===================================================================================
+// Fixed images on the page — text steers around exclusion rectangles.
+// ===================================================================================
+
+// An in-text (flow) image anchored at content char `at`, with a placement mode and size.
+// mode: IMG_LEFT → float left, text wraps right; IMG_FULL → full-width block, text below;
+// IMG_RIGHT → float right, text wraps left. Placed at the flow position when reached.
+pub struct FlowImage { at: integer, mode: integer, w: float, h: float, id: integer }
+pub const IMG_LEFT = 0;
+pub const IMG_FULL = 1;
+pub const IMG_RIGHT = 2;
+
+// a horizontal interval (internal to the free-span computation).
+struct Span { lo: float, hi: float }
+
+fn fmin(a: float, b: float) -> float { if a < b { return a; } return b; }
+fn fmax(a: float, b: float) -> float { if a > b { return a; } return b; }
+
+// insertion-sort spans by `lo` into a fresh vector (no in-place swap — loft #338).
+fn sort_spans(spans: vector<Span>) -> vector<Span> {
+  out: vector<Span> = [];
+  for i in 0..len(spans) {
+    s = spans[i]?;
+    ins: vector<Span> = [];
+    placed = false;
+    for j in 0..len(out) {
+      o = out[j]?;
+      if (!placed) && (s.lo < o.lo) { ins += [s]; placed = true; }
+      ins += [o];
+    }
+    if !placed { ins += [s]; }
+    out = ins;
+  }
+  return out;
+}
+
+// free_span(left, right, y, h, imgs) → (flo, fhi, blocked): the WIDEST free horizontal interval
+// in [left,right] over the vertical band [y, y+h), after removing every image rectangle that
+// intersects that band. `blocked` is true when no free width remains (a full-width obstruction
+// — the flow must drop below it). This is the one primitive both image kinds route through.
+//
+// The seam for NON-RECTANGULAR page images (arbitrary shapes — deferred until the page-layout
+// designer makes them usable): this function turns exclusions into a per-band covered interval
+// [clo,chi]. A shape only has to report ITS covered interval at (y,h) instead of a rectangle's;
+// the flow above never changes. So "shapes not just rects" is a change to the coverage query,
+// not to the layout.
+pub fn free_span(left: float, right: float, y: float, h: float, imgs: vector<PlacedImage>) -> (float, float, boolean) {
+  covs: vector<Span> = [];
+  for i in 0..len(imgs) {
+    r = imgs[i]?;
+    if (r.y < (y + h)) && ((r.y + r.h) > y) {            // rectangle intersects the vertical band
+      clo = fmax(left, r.x);
+      chi = fmin(right, r.x + r.w);
+      if chi > clo { covs += [ Span { lo: clo, hi: chi } ]; }
+    }
+  }
+  if len(covs) == 0 { return (left, right, false); }
+  sorted_c = sort_spans(covs);
+  best_lo = left;
+  best_hi = left;
+  best_w = 0.0;
+  cursor = left;
+  for i in 0..len(sorted_c) {
+    c = sorted_c[i]?;
+    if c.lo > cursor {                                    // a free gap [cursor, c.lo)
+      if (c.lo - cursor) > best_w { best_w = c.lo - cursor; best_lo = cursor; best_hi = c.lo; }
+    }
+    if c.hi > cursor { cursor = c.hi; }
+  }
+  if (right - cursor) > best_w { best_w = right - cursor; best_lo = cursor; best_hi = right; }
+  if best_w <= 0.0 { return (0.0, 0.0, true); }
+  return (best_lo, best_hi, false);
+}
+
+// the y to drop to when a band is fully blocked: the nearest bottom edge of an obstruction
+// intersecting [y, y+h) (so at least one rectangle ends there, opening space). Always > y.
+pub fn band_bottom(imgs: vector<PlacedImage>, y: float, h: float, left: float, right: float) -> float {
+  best = y + h;
+  found = false;
+  for i in 0..len(imgs) {
+    r = imgs[i]?;
+    if (r.y < (y + h)) && ((r.y + r.h) > y) && (r.x < right) && ((r.x + r.w) > left) {
+      b = r.y + r.h;
+      if (!found) || (b < best) { best = b; found = true; }
+    }
+  }
+  if best <= y { best = y + h; }
+  return best;
+}
+
+// Lay text into a single flow region [left,right] starting at top y0, steering around images.
+// `page_imgs` are FIXED exclusion rectangles (page-layout images). `flow_imgs` are IN-TEXT
+// images anchored at a content char, placed when the flow reaches them: IMG_FULL blocks the
+// width (text resumes below), IMG_LEFT/IMG_RIGHT float to a side (text wraps in the free gap).
+// Each line's width comes from free_span at its band, so text never overlaps an image; a
+// fully-blocked band drops below the obstruction. `line_h` is the nominal line height used for
+// the band test (exact for a uniform surface). Returns the text boxes + the placed images.
+pub fn layout_flow_images(d: Doc, left: float, right: float, y0: float, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, para_gap: float, line_h: float, page_imgs: vector<PlacedImage>, flow_imgs: vector<FlowImage>) -> Layout {
+  toks = seg(d);
+  boxes: vector<Box> = [];
+  lines: vector<LaidLine> = [];
+  placed: vector<PlacedImage> = [];
+  excl: vector<PlacedImage> = [];
+  for pi in 0..len(page_imgs) { excl += [ page_imgs[pi]? ]; placed += [ page_imgs[pi]? ]; }
+  ci = 0;
+  y = y0;
+  cur = 0;
+  while cur < len(toks) {
+    // place any in-text images whose anchor the flow has reached (at ≤ this line's start char)
+    lsc = (toks[cur]?).ts;
+    while (ci < len(flow_imgs)) && ((flow_imgs[ci]?).at <= lsc) {
+      img = flow_imgs[ci]?;
+      pim = PlacedImage { x: left, y: y, w: img.w, h: img.h, id: img.id };
+      if img.mode == IMG_FULL {
+        pim = PlacedImage { x: left, y: y, w: right - left, h: img.h, id: img.id };
+        placed += [ pim ];
+        excl += [ pim ];
+        y += img.h;                                       // full block — text resumes below
+      } else if img.mode == IMG_RIGHT {
+        pim = PlacedImage { x: right - img.w, y: y, w: img.w, h: img.h, id: img.id };
+        placed += [ pim ];
+        excl += [ pim ];
+      } else {                                            // IMG_LEFT
+        placed += [ pim ];
+        excl += [ pim ];
+      }
+      ci += 1;
+    }
+    fs = free_span(left, right, y, line_h, excl);
+    if fs.2 {
+      y = band_bottom(excl, y, line_h, left, right);       // blocked band → drop below it
+    } else {
+      flo = fs.0;
+      line_w = fs.1 - fs.0;
+      nl = next_line(d, toks, cur, line_w, resolve, measure);
+      last_excl = nl.0;
+      next_tok = nl.1;
+      para = nl.3;
+      if last_excl > cur {
+        pe = para || (next_tok >= len(toks));
+        pl = place_line(d, toks, cur, last_excl, nl.2, pe, 0.0, resolve, measure);   // local x from 0
+        for bi in 0..len(pl.boxes) {
+          b = pl.boxes[bi]?;
+          boxes += [ Box { rect: Rect { x: b.rect.x + flo, y: b.rect.y + y, w: b.rect.w, h: b.rect.h }, ks: b.ks, ke: b.ke, style: b.style, hyphen: b.hyphen } ];
+        }
+        lines += [ LaidLine { cs: pl.line.cs, ce: pl.line.ce, y: y, h: pl.line.h, para_end: pl.line.para_end, right: fs.1 } ];
+        y += pl.line.h;
+        if para { y += para_gap; }
+      } else if para {
+        y += para_gap;
+      }
+      cur = next_tok;
+    }
+  }
+  return Layout { boxes: boxes, lines: lines, images: placed };
+}
+
+// The full page: multi-column flow (paragraphs + hyphenation) that steers around BOTH image
+// kinds. Page images are fixed absolute rectangles (each column avoids the ones over its
+// x-range); in-text images are placed in whichever column the flow reaches their anchor in
+// (IMG_LEFT/RIGHT float to that column's side, IMG_FULL blocks the column, breaking to the next
+// column if it will not fit). The nominal line height is run_height(resolve(0)) — exact for a
+// uniform surface. With no images this is identical to layout_columns; that is asserted.
+pub fn layout_page_columns(d: Doc, g: PageGeom, page_imgs: vector<PlacedImage>, flow_imgs: vector<FlowImage>, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float) -> Layout {
+  toks = seg(d);
+  cw = column_width(g);
+  ch = column_height(g);
+  line_h = run_height(resolve(0));
+  boxes: vector<Box> = [];
+  lines: vector<LaidLine> = [];
+  placed: vector<PlacedImage> = [];
+  excl: vector<PlacedImage> = [];
+  for pgi in 0..len(page_imgs) { excl += [ page_imgs[pgi]? ]; placed += [ page_imgs[pgi]? ]; }
+  page = 0;
+  col = 0;
+  y_local = 0.0;
+  cur = 0;
+  ci = 0;
+  while cur < len(toks) {
+    col_x = g.margin_left + (col as float) * (cw + g.gutter);
+    col_right = col_x + cw;
+    region_top = (page as float) * g.height + g.margin_top;
+    // place any in-text images the flow has reached, in the current column
+    lsc = (toks[cur]?).ts;
+    while (ci < len(flow_imgs)) && ((flow_imgs[ci]?).at <= lsc) {
+      img = flow_imgs[ci]?;
+      if (img.mode == IMG_FULL) && (y_local > 0.0) && ((y_local + img.h) > ch) {
+        col += 1;
+        if col >= g.columns { page += 1; col = 0; }
+        y_local = 0.0;
+        col_x = g.margin_left + (col as float) * (cw + g.gutter);
+        col_right = col_x + cw;
+        region_top = (page as float) * g.height + g.margin_top;
+      }
+      aby = region_top + y_local;
+      if img.mode == IMG_FULL {
+        pim = PlacedImage { x: col_x, y: aby, w: cw, h: img.h, id: img.id };
+        placed += [ pim ]; excl += [ pim ]; y_local += img.h;
+      } else if img.mode == IMG_RIGHT {
+        pim = PlacedImage { x: col_right - img.w, y: aby, w: img.w, h: img.h, id: img.id };
+        placed += [ pim ]; excl += [ pim ];
+      } else {
+        pim = PlacedImage { x: col_x, y: aby, w: img.w, h: img.h, id: img.id };
+        placed += [ pim ]; excl += [ pim ];
+      }
+      ci += 1;
+    }
+    // column break for the next line
+    if (y_local > 0.0) && ((y_local + line_h) > ch) {
+      col += 1;
+      if col >= g.columns { page += 1; col = 0; }
+      y_local = 0.0;
+      col_x = g.margin_left + (col as float) * (cw + g.gutter);
+      col_right = col_x + cw;
+      region_top = (page as float) * g.height + g.margin_top;
+    }
+    aby2 = region_top + y_local;
+    fs = free_span(col_x, col_right, aby2, line_h, excl);
+    if fs.2 {
+      y_local = band_bottom(excl, aby2, line_h, col_x, col_right) - region_top;   // drop below obstruction
+    } else {
+      flo = fs.0;
+      line_w = fs.1 - fs.0;
+      nl = next_line(d, toks, cur, line_w, resolve, measure);
+      last_excl = nl.0;
+      next_tok = nl.1;
+      para = nl.3;
+      if last_excl > cur {
+        pe = para || (next_tok >= len(toks));
+        pl = place_line(d, toks, cur, last_excl, nl.2, pe, 0.0, resolve, measure);
+        for bi in 0..len(pl.boxes) {
+          b = pl.boxes[bi]?;
+          boxes += [ Box { rect: Rect { x: b.rect.x + flo, y: b.rect.y + aby2, w: b.rect.w, h: b.rect.h }, ks: b.ks, ke: b.ke, style: b.style, hyphen: b.hyphen } ];
+        }
+        lines += [ LaidLine { cs: pl.line.cs, ce: pl.line.ce, y: aby2, h: pl.line.h, para_end: pl.line.para_end, right: fs.1 } ];
+        y_local += pl.line.h;
+        if para { y_local += g.para_gap; }
+      } else if para {
+        y_local += g.para_gap;
+      }
+      cur = next_tok;
+    }
+  }
+  return Layout { boxes: boxes, lines: lines, images: placed };
+}

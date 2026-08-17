@@ -1,0 +1,25 @@
+// A RenderSink harness for lib/zttext — the engine laid out and its paint commands emitted, so the
+// SAME layout can be checked on native AND the browser (the --html leg of the M0-M5 parity gate,
+// which the DOM RenderSink lands). Lay out a fixed document and emit `render_commands` (the LINE|/
+// BOX| sink protocol) via host_output: on native this goes to stderr, on --html to the JS host —
+// which either PAINTS it to the DOM (a real viewer's host.js) or, in parity.sh, compares it to the
+// native emission. host_output is per-target BY DESIGN, so this compares the engine against itself
+// across targets rather than two implementations that ought to agree.
+//
+// The Measurer here is `mono_measure` (pure loft, deterministic) ON PURPOSE: it isolates the
+// ENGINE's flow/justify/float codegen so the --html leg proves the box set is byte-identical in the
+// browser. Real glyph metrics (lib/ztfont) are a separately-proven, byte-identical Measurer, so a
+// real viewer composes the two; this harness pins the engine half. Run: `loft src/main.loft` with
+// any trigger on stdin.
+use zttext;
+
+fn main() {
+  _ = host_input();   // a trigger; the scenario is fixed, so the emission is deterministic
+  d = doc_from_text(
+    "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. "
+    + "Now is the time for all good folk to come to the aid of the party.\n\n"
+    + "A second paragraph, to exercise a para-end line and a fresh baseline in the sink output.",
+    0);
+  l = flow_layout_full(d, default_resolver, mono_measure, 40.0);
+  host_output(render_commands(l, d));
+}
