@@ -70,17 +70,19 @@ fn head(major: integer, arg: integer) -> vector<u8> {
   return buf;
 }
 
-// Bytewise lexicographic less-than over two byte strings (RFC 8949 §4.2.1
-// canonical map-key order): at the first differing byte the smaller byte wins;
-// a proper prefix sorts before the longer string.
-fn byte_lt(a: vector<u8>, b: vector<u8>) -> boolean {
-  na = len(a);
-  nb = len(b);
-  m = if na < nb { na } else { nb };
-  for i in 0..m {
-    if a[i] != b[i] { return a[i] < b[i]; }
+// Bytewise lexicographic less-than (RFC 8949 §4.2.1 canonical map-key order)
+// between two keys held as slices [oa,oa+la) and [ob,ob+lb) of the shared flat
+// buffer `kb`: at the first differing byte the smaller byte wins, and a proper
+// prefix sorts before the longer string. Slice form (no materialised vectors), so
+// the ranking loop compares precomputed key bytes without allocating.
+fn key_lt(kb: vector<u8>, oa: integer, la: integer, ob: integer, lb: integer) -> boolean {
+  m = if la < lb { la } else { lb };
+  for t in 0..m {
+    ca = kb[oa + t] ?? 0;
+    cb = kb[ob + t] ?? 0;
+    if ca != cb { return ca < cb; }
   }
-  return na < nb;
+  return la < lb;
 }
 
 // Encode a map with its entries in canonical key order: keys compared by their
@@ -88,21 +90,48 @@ fn byte_lt(a: vector<u8>, b: vector<u8>) -> boolean {
 // position equal to its key's RANK (how many keys sort before it) — a formulation
 // that uses only append + read (no marker array, no vector element assignment,
 // no nested vectors), so it codegens identically on the interpreter and --native.
-// O(n^3), which is fine: a signable record's maps are small.
+//
+// O(n^2): each key is encoded ONCE into a flat buffer (`keybuf` + offset/length
+// tables), then ranks are computed by comparing those precomputed bytes in place.
+// The earlier form re-encoded every key inside a triple loop (O(n^3) key-encodings)
+// — fine for a 3-field record, but a directory / oplog-snapshot map with hundreds
+// of entries hit a wall (measured 100 entries 4 ms, 200 entries 33 ms). Ties are
+// broken by original index so the rank is a strict total order (a well-formed
+// canonical map has distinct keys; this just keeps a malformed one deterministic
+// instead of dropping or duplicating an entry).
 fn encode_map(entries: vector<CborEntry>) -> vector<u8> {
   n = len(entries);
   buf = head(5, n);
+  // 1) encode each key exactly once into a shared flat buffer + offset/length tables
+  keybuf: vector<u8> = [];
+  koff: vector<integer> = [];
+  klen: vector<integer> = [];
+  for i in 0..n {
+    k = encode(entries[i].key);
+    koff += [ len(keybuf) ];
+    klen += [ len(k) ];
+    keybuf += k;
+  }
+  // 2) rank[i] = how many keys sort strictly before key i (index breaks ties)
+  ranks: vector<integer> = [];
+  for i in 0..n {
+    oi = koff[i] ?? 0; li = klen[i] ?? 0;
+    r = 0;
+    for j in 0..n {
+      if j != i {
+        oj = koff[j] ?? 0; lj = klen[j] ?? 0;
+        if key_lt(keybuf, oj, lj, oi, li) { r = r + 1; }
+        else if (j < i) && !key_lt(keybuf, oi, li, oj, lj) { r = r + 1; }  // equal keys: lower index first
+      }
+    }
+    ranks += [ r ];
+  }
+  // 3) emit entries in ascending rank (append-only; key bytes reused from keybuf)
   for target in 0..n {
     for i in 0..n {
-      ki = encode(entries[i].key);
-      rank = 0;
-      for j in 0..n {
-        if j != i {
-          if byte_lt(encode(entries[j].key), ki) { rank = rank + 1; }
-        }
-      }
-      if rank == target {
-        buf += ki;
+      if (ranks[i] ?? 0) == target {
+        oi = koff[i] ?? 0; li = klen[i] ?? 0;
+        for t in 0..li { buf += [ keybuf[oi + t] ?? 0 ]; }
         buf += encode(entries[i].value);
       }
     }
