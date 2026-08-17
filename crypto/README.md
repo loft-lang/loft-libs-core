@@ -49,7 +49,7 @@ Every function fails **soft**: malformed input returns `""` (or `false` for
 | Function | Returns |
 |---|---|
 | `sha256(data: text) -> text` | 64-char lowercase hex digest |
-| `sha256_b64(data_b64: text) -> text` | hex digest of the base64-decoded bytes |
+| `sha256_b64(data_b64: text) -> text` | **base64** of the 32-byte digest of the base64-decoded bytes |
 | `hmac_sha256(key: text, data: text) -> text` | 64-char lowercase hex MAC |
 
 ### Base64 & raw bytes
