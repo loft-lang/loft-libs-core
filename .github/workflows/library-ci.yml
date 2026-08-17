@@ -11,4 +11,4 @@ jobs:
   ci:
     uses: loft-lang/loft/.github/workflows/library-ci-reusable.yml@main
     with:
-      packages: '["arguments", "cbor", "crypto", "random", "regex"]'
+      packages: '["arguments", "cbor", "crypto", "random", "regex", "zttext"]'
