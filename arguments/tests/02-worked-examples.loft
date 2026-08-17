@@ -1,0 +1,75 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Worked examples for the `arguments` library (@PLN141).  Each `test_*` below is a
+// REAL, run-every-CI demonstration of a function whose correct use is not obvious
+// from its signature alone; the function documents itself by CITING the tag with
+// `// Example: @ARG-00N`, and `check_doc_drift.sh examples` fails if a citation goes
+// dangling (no test carries the tag).  These are teaching examples, distinct from the
+// exhaustive assertion suite in 01-arguments.loft.
+use arguments;
+
+// @ARG-001 — the declare → parse → query lifecycle.  Build an `Args`, declare its
+// options, then `parse(argv)` returns a boolean (false on a usage error, see @ARG-004);
+// afterwards flags read through `has`, value options through `get`, and every
+// non-option word lands in `positionals` in order.  This SEQUENCE is the whole API.
+fn test_parse_lifecycle() {
+  a = arguments::create("build", "1.0", "Compile a project");
+  a.flag("v", "verbose", "Be verbose");
+  a.option("o", "output", "FILE", "Where to write the result");
+  // A valid command line parses; short flag, long value option, and a positional.
+  assert(a.parse(["-v", "--output=app.bin", "src/main"]), "a valid line parses");
+  assert(a.has("verbose"), "the flag reads as present");
+  assert(a.get("output") == "app.bin", "the value option carries its value");
+  assert(len(a.positionals) == 1, "the leftover word is a positional");
+  assert(a.positionals[0] == "src/main", "positionals keep their order");
+}
+
+// @ARG-002 — an optional-argument option takes a value ONLY when it is GLUED
+// (`--color=auto` or `-cauto`).  Given bare (`--color`) it is present with an empty
+// value — it does NOT consume the following word, and it is NOT an error.  That
+// glued-only rule is exactly what separates `optional` from `option` (which always
+// wants a value) and from `flag` (which never takes one).
+fn test_optional_glued_only() {
+  a = arguments::create("ls", "1.0", "List files");
+  a.optional("c", "color", "WHEN", "Colorize the output");
+  // Bare: present, value "", and the next word stays a positional.
+  assert(a.parse(["--color", "file.txt"]), "bare optional parses");
+  assert(a.has("color"), "bare --color is present");
+  assert(a.get("color") == "", "bare --color resolves to an empty value");
+  assert(a.positionals[0] == "file.txt", "the following word is NOT eaten as its value");
+  // Glued: the value attaches.
+  a = arguments::create("ls", "1.0", "List files");
+  a.optional("c", "color", "WHEN", "Colorize the output");
+  assert(a.parse(["--color=always"]), "glued optional parses");
+  assert(a.get("color") == "always", "--color=always carries its value");
+}
+
+// @ARG-003 — opt-in help/version.  `enable_help()` registers `--help`/`-h` and
+// `--version`/`-V`, but prints NOTHING itself: after `parse`, the caller asks
+// `wants_help()` / `wants_version()` and renders `help()` / `version_text()`.  A
+// `--help` line also short-circuits the required-option check — GNU prints help
+// without validating — so it parses OK even when a mandatory option is missing.
+fn test_enable_help_optin() {
+  a = arguments::create("myapp", "2.0", "A demo application");
+  a.required("c", "config", "PATH", "Config file");
+  a.enable_help();
+  // --help parses despite the required --config being absent...
+  assert(a.parse(["--help"]), "--help parses even with a required option missing");
+  assert(a.wants_help(), "the caller learns to print help via wants_help()");
+  assert(!a.wants_version(), "it was help, not version");
+  // ...and nothing was printed, so the caller drives the output itself.
+  assert(a.help().contains("Usage:"), "help() renders the screen on demand");
+}
+
+// @ARG-004 — a required option makes `parse` FAIL when it is absent, and this is how
+// EVERY usage error surfaces: `parse` returns false, `ok()` is false, `error_msg()`
+// gives the GNU-style reason, and `try_help()` is the "Try '<prog> --help' …" hint to
+// print beside it.  A real program prints those two lines and exits non-zero.
+fn test_required_error_idiom() {
+  a = arguments::create("deploy", "1.0", "Ship a build");
+  a.required("t", "target", "HOST", "Where to deploy");
+  assert(!a.parse([]), "a missing required option fails the parse");
+  assert(!a.ok(), "ok() reports the failure");
+  assert(a.error_msg().contains("target"), "error_msg() names the missing option");
+  assert(a.try_help().contains("--help"), "try_help() is the hint to show the user");
+}
