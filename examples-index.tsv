@@ -12,3 +12,6 @@
 @CRY-004	crypto/tests/worked-examples.loft:125	test_x25519_then_hkdf_makes_the_key	https://github.com/loft-lang/loft-libs-core/blob/main/crypto/tests/worked-examples.loft#L125
 @CRY-005	crypto/tests/worked-examples.loft:163	test_aes256gcm_seal_open_and_the_empty_answer	https://github.com/loft-lang/loft-libs-core/blob/main/crypto/tests/worked-examples.loft#L163
 @CRY-006	crypto/tests/worked-examples.loft:207	test_hpke_transmit_enc_and_match_the_context	https://github.com/loft-lang/loft-libs-core/blob/main/crypto/tests/worked-examples.loft#L207
+@RND-001	random/tests/worked-examples.loft:30	test_seeding_the_global_does_not_make_it_yours	https://github.com/loft-lang/loft-libs-core/blob/main/random/tests/worked-examples.loft#L30
+@RND-002	random/tests/worked-examples.loft:68	test_assignment_forks_a_stream_but_a_parameter_shares_it	https://github.com/loft-lang/loft-libs-core/blob/main/random/tests/worked-examples.loft#L68
+@RND-003	random/tests/worked-examples.loft:99	test_every_draw_moves_the_stream_including_a_shuffle	https://github.com/loft-lang/loft-libs-core/blob/main/random/tests/worked-examples.loft#L99
