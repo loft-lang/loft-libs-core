@@ -55,6 +55,17 @@ dlopen marshaller has no signature arm for yet.  That FFI gap is tracked
 in the regex plan (jjstwerff/loft `lib_plans/.../01-regex`), not worked
 around here.
 
+## Worked examples
+
+The contracts a signature cannot state are demonstrated by running tests
+(@PLN141): [tests/worked-examples.loft](tests/worked-examples.loft) —
+`@RGX-001` the spelling decides which library you called (a bare
+`find(pattern, input)` compiles and reaches the **stdlib** method, answering
+something else), `@RGX-002` `search` answers a BYTE offset and answers null on a
+miss despite its `integer` type, `@RGX-003` a broken pattern reports a miss
+rather than an error, `@RGX-004` `split_on` yields the gaps — including empty
+ones — and never yields zero pieces.
+
 ## Provenance
 
 Native crate `loft_regex` wraps the Rust `regex` crate — the same shape

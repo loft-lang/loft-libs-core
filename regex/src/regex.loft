@@ -70,6 +70,10 @@ fn split_iter(pattern: text, input: text) -> iterator<text> {
 // is no match (or the pattern is invalid).  The conventional regex-search verb
 // — named `search`, not `find`, because bare `find` on text is the stdlib's
 // literal substring search.  Call as  line.search("[0-9]+").
+// Example: @RGX-001 — why this is `search` and not `find`, and what a bare
+// `find(pattern, input)` answers instead.
+// Example: @RGX-002 — the answer is a BYTE offset (slice with it, compare it to
+// `size()` not `len()`), and a miss is null despite the `integer` return type.
 pub fn search(self: text, pattern: text) -> integer {
   match_start(pattern, self)
 }
@@ -77,6 +81,8 @@ pub fn search(self: text, pattern: text) -> integer {
 // True if `pattern` matches anywhere in the text.  `both` registers this as
 // BOTH a method (`line.matches(p)`) and a free function (`matches(line, p)`).
 // Collision-free on `text` (the stdlib has `contains`, not `matches`).
+// Example: @RGX-003 — a pattern that never compiled answers false, exactly like
+// text that simply did not match.
 pub fn matches(both: text, pattern: text) -> boolean {
   is_match(pattern, both)
 }
@@ -86,6 +92,8 @@ pub fn matches(both: text, pattern: text) -> boolean {
 // materialised).  Named `split_on`, not `split`, because bare `split` on text
 // is the stdlib character-separator split.  Call as
 //   for piece in line.split_on("[,;]") { }.
+// Example: @RGX-004 — it yields the gaps between matches, so a separator at
+// either end leaves an empty piece and unmatched text comes back as ONE piece.
 pub fn split_on(self: text, pattern: text) -> iterator<text> {
   yield from split_iter(pattern, self);
 }
@@ -97,11 +105,15 @@ pub fn split_on(self: text, pattern: text) -> iterator<text> {
 // recommended-idiom channel (@PLN102 arc C) steers new calls to `search` /
 // `split_on` so the surface converges on one clean spelling per operation.
 
+// Example: @RGX-001 — reachable only as `regex::find`; the bare spelling
+// resolves the stdlib `text` method and answers something else entirely.
 pub fn find(pattern: text, input: text) -> integer {
   input.search(pattern)
 }
 #superseded "search"
 
+// Example: @RGX-001 — same shadow as `find`: bare `split` is the stdlib's
+// character split, not this one.
 pub fn split(pattern: text, input: text) -> iterator<text> {
   yield from input.split_on(pattern);
 }

@@ -1,6 +1,16 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Regex Phase 0: matches / find / split, as free functions AND text methods.
+// The two `#superseded` spellings `find` / `split` ARE shadowed by the stdlib
+// `text` methods of the same name — that is precisely why `search` / `split_on`
+// exist and why those two are superseded.  Asserting the warning rather than
+// suppressing it: if the shadow ever disappears (the superseded pair removed, or
+// the stdlib method renamed) this annotation goes red and asks to be deleted.
+// It does couple THIS SUITE to a loft carrying `shadowed-by-method` (2026-08-16
+// onward); the library's own runtime behaviour is unchanged, so the package's
+// `loft` floor stays where it is.
+// @EXPECT_WARNING: `find` is also a method on `text`
+// @EXPECT_WARNING: `split` is also a method on `text`
 use regex;
 
 fn main() {
