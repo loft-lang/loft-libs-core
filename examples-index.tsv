@@ -23,3 +23,7 @@
 @RND-001	random/tests/worked-examples.loft:30	test_seeding_the_global_does_not_make_it_yours	https://github.com/loft-lang/loft-libs-core/blob/main/random/tests/worked-examples.loft#L30
 @RND-002	random/tests/worked-examples.loft:68	test_assignment_forks_a_stream_but_a_parameter_shares_it	https://github.com/loft-lang/loft-libs-core/blob/main/random/tests/worked-examples.loft#L68
 @RND-003	random/tests/worked-examples.loft:99	test_every_draw_moves_the_stream_including_a_shuffle	https://github.com/loft-lang/loft-libs-core/blob/main/random/tests/worked-examples.loft#L99
+@ZTX-001	zttext/tests/worked-examples.loft:17	test_an_edit_is_a_value_you_have_to_keep	https://github.com/loft-lang/loft-libs-core/blob/main/zttext/tests/worked-examples.loft#L17
+@ZTX-002	zttext/tests/worked-examples.loft:44	test_offsets_are_characters_and_the_buffer_only_grows	https://github.com/loft-lang/loft-libs-core/blob/main/zttext/tests/worked-examples.loft#L44
+@ZTX-003	zttext/tests/worked-examples.loft:68	test_undo_is_inverted_against_the_state_before_the_edit	https://github.com/loft-lang/loft-libs-core/blob/main/zttext/tests/worked-examples.loft#L68
+@ZTX-004	zttext/tests/worked-examples.loft:94	test_layout_is_portable_because_measurement_is_an_argument	https://github.com/loft-lang/loft-libs-core/blob/main/zttext/tests/worked-examples.loft#L94

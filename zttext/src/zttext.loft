@@ -81,6 +81,8 @@ pub fn materialise(d: Doc) -> text {
 }
 
 // |⌊D⌋| — the character length of the logical text.
+// Example: @ZTX-002 — CHARACTERS, which is not the byte length of the
+// materialised text.
 pub fn doc_len(d: Doc) -> integer {
   n = 0;
   for i in 0..len(d.pieces) { n += (d.pieces[i]?).count; }
@@ -113,6 +115,8 @@ pub fn locate_inverse(d: Doc, pi: integer, ro: integer) -> integer {
 
 // insert text `s` (style-id `style`) at anchor `a`. Appends `s`'s characters to a fresh
 // buffer (append-only), then rebuilds the piece sequence splitting the piece at `a`.
+// Example: @ZTX-001 — this RETURNS a new Doc; the one passed in is unchanged, so
+// a discarded result is an edit that silently never happened.
 pub fn insert_text(d: Doc, a: integer, s: text, style: integer) -> Doc {
   n = len(s);
   if n == 0 { return d; }
@@ -145,6 +149,9 @@ pub fn insert_text(d: Doc, a: integer, s: text, style: integer) -> Doc {
 
 // delete the range [a,b). Keeps each piece's portion outside [a,b); the buffer is
 // UNCHANGED (deleted characters stay in B so undo can restore them).
+// Example: @ZTX-001 — a value, not a mutation: bind the result.
+// Example: @ZTX-002 — `a` and `b` are CHARACTER positions, and the append-only
+// buffer does not shrink (that is what undo restores from).
 pub fn delete_range(d: Doc, a: integer, b: integer) -> Doc {
   if b <= a { return d; }
   np: vector<Piece> = [];
@@ -168,6 +175,7 @@ pub fn delete_range(d: Doc, a: integer, b: integer) -> Doc {
 
 // set style-id `style` on the range [a,b): split each overlapping piece three ways
 // ([ps,a) old · [a,b) new · [b,pe) old) and restyle the middle.
+// Example: @ZTX-001 — a value, not a mutation: bind the result.
 pub fn set_style(d: Doc, a: integer, b: integer, style: integer) -> Doc {
   if b <= a { return d; }
   np: vector<Piece> = [];
@@ -291,6 +299,9 @@ pub fn inv_op_group(pre: Doc, op: Op) -> vector<Op> {
 // invert(D, τ) → τ⁻¹ such that apply(apply(D,τ), τ⁻¹) ≈ D (same text + same per-char
 // styles). Each op's inverse is computed against its pre-state; the groups are emitted in
 // reverse op order (prepend each new group), since τ⁻¹ undoes the last op first.
+// Example: @ZTX-003 — `d` must be the state BEFORE the transaction; the inverse of
+// a deletion is an insertion of what was there, which only the pre-state knows.
+// Restores per-character styles as well as text.
 pub fn invert(d: Doc, t: Txn) -> Txn {
   cur = d;
   result: vector<Op> = [];
@@ -643,6 +654,9 @@ pub fn flow_layout_full(d: Doc, resolve: fn(integer) -> Style, measure: fn(text,
 }
 
 // The BoxSet-only view of a flow layout (the M1/M2 surface).
+// Example: @ZTX-004 — measurement is an ARGUMENT, which is why the same document
+// and ports lay out identically on every target; `default_resolver` + `mono_measure`
+// are the deterministic pair to test against.
 pub fn flow_layout(d: Doc, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float) -> BoxSet {
   return BoxSet { boxes: flow_layout_full(d, resolve, measure, w_col).boxes };
 }
