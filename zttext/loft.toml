@@ -1,6 +1,6 @@
 [package]
 name = "zttext"
-version = "0.1.0"
+version = "0.1.1"
 description = "A text engine for loft: piece-table content core, transactional undo, and portable layout with measurement injected"
 loft = ">=0.8"                   # which loft this package needs (a RANGE, unlike the two below)
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for

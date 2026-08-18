@@ -16,14 +16,14 @@ Per the chunked-repo design in
 
 ## Packages
 
-| Subdir | Package | Status |
+| Subdir | Package | Latest |
 |---|---|---|
-| [`crypto/`](crypto/) | `crypto` — SHA-256, HMAC, base64 | v0.1.0 (extracted 2026-05-24) |
-| [`arguments/`](arguments/) | `arguments` — CLI argument parsing | v0.1.0 (extracted 2026-05-24) |
-| [`random/`](random/) | `random` — PRNG | v0.1.0 (extracted 2026-05-24, **showcase drain**: the LoftStore-forwarding codegen feature in loft 0.8.5+ ships here as its canonical example) |
-| [`regex/`](regex/) | `regex` — small-script regex (`matches`/`find`/`split`, thread-local cache) | v0.1.0 (added 2026-06-01) |
-| [`cbor/`](cbor/) | `cbor` — canonical CBOR (RFC 8949) encode/decode, pure loft | v0.1.0 (added 2026-06-20, [@PLN83]) |
-| [`zttext/`](zttext/) | `zttext` — rich-text engine: piece table, flow/justify/float layout, pagination, bidi selection, hit-testing, RenderSink | v0.1.0 (migrated 2026-08-17 from `zero-trust-shared-files/lib/zttext`) |
+| [`arguments/`](arguments/) | `arguments` — CLI argument parsing | v0.2.1 |
+| [`cbor/`](cbor/) | `cbor` — canonical CBOR (RFC 8949) encode/decode, pure loft | v0.1.4 |
+| [`crypto/`](crypto/) | `crypto` — SHA-256, HMAC, base64, ES256/JOSE, HKDF, sealed boxes | v0.3.8 |
+| [`random/`](random/) | `random` — PRNGs in two tiers: a shared global generator and owned `RandStream`s | v0.3.1 |
+| [`regex/`](regex/) | `regex` — small-script regex (`matches` / `search` / `split_on`, thread-local cache) | v0.3.0 |
+| [`zttext/`](zttext/) | `zttext` — rich-text engine: piece table, flow/justify/float layout, pagination, bidi selection, hit-testing, RenderSink | v0.1.1 |
 
 Future drains from the loft stdlib (Phase 3.6 in
 [plan-12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md#phase-36--stdlib-drain-into-libs))
@@ -48,10 +48,12 @@ packages in this multi-package repo:
 
 | Package + version | Git tag |
 |---|---|
-| crypto 0.1.0 | `crypto-v0.1.0` |
-| arguments 0.1.0 (future) | `arguments-v0.1.0` |
-| random 0.1.0 (future) | `random-v0.1.0` |
-| regex 0.1.0 (future) | `regex-v0.1.0` |
+| arguments 0.2.1 | `arguments-v0.2.1` |
+| cbor 0.1.4 | `cbor-v0.1.4` |
+| crypto 0.3.8 | `crypto-v0.3.8` |
+| random 0.3.1 | `random-v0.3.1` |
+| regex 0.3.0 | `regex-v0.3.0` |
+| zttext 0.1.1 | `zttext-v0.1.1` |
 
 A package's release flow (also documented in
 [SUBMITTING.md](https://github.com/loft-lang/registry/blob/main/SUBMITTING.md)
