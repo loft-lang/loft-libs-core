@@ -5,17 +5,26 @@
 
 // Returns a random integer in [lo, hi] (inclusive).
 // Returns null when lo > hi or when either argument is null.
+// Draws from the ONE hidden generator every call site shares — see `rand_seed`.
+// Example: @RND-001 — why a seeded global sequence is not yours, and what a
+// RandStream gives instead.
 pub fn rand(lo: integer, hi: integer) -> integer?;
 #native
 
 // Seeds the thread-local random number generator with the given value.
-// Call this before rand() or rand_indices() to get reproducible sequences.
+// Call this before rand() or rand_indices() to get reproducible sequences — but
+// note that it fixes what the GENERATOR produces, not what you receive: it is
+// shared, so one `rand()` from anywhere else shifts everything after it.  When
+// reproducibility is a requirement rather than a convenience, own a stream.
+// Example: @RND-001 — a foreign draw between two of yours, and the same
+// interruption against a RandStream.
 pub fn rand_seed(seed: integer);
 #native
 
 // Returns a vector of n integers [0, 1, ..., n-1] in a random order.
 // Useful for random iteration, shuffling, or sampling without replacement.
 // Returns an empty vector when n is 0 or null.
+// Example: @RND-001 — this draws from the shared global generator too.
 pub fn rand_indices(n: integer) -> vector<integer>;
 #native
 
@@ -47,6 +56,9 @@ pub struct RandStream {
 
 // Seed an independent stream. Any integer seed is valid (negative and zero included);
 // equal seeds give equal streams, different seeds give decorrelated streams.
+// Example: @RND-001 — the reason to prefer this over `rand_seed`.
+// Example: @RND-003 — equal seeds replay exactly, so a recorded seed is a
+// recorded run.
 pub fn seed_stream(seed: integer) -> RandStream {
   a = seed % 2147483562 ?? 0;
   if a < 0 { a = -a; }
@@ -59,6 +71,8 @@ pub fn seed_stream(seed: integer) -> RandStream {
 
 // A random integer in [lo, hi] (inclusive) from THIS stream, advancing it.
 // Returns null when lo > hi (the same contract as the global rand()).
+// Example: @RND-002 — assigning a stream COPIES it, passing one to a function
+// LINKS it, so a helper that draws spends the caller's sequence.
 pub fn get(self: RandStream, lo: integer, hi: integer) -> integer? {
   if lo > hi { return null; }
   // L'Ecuyer combined LCG, Schrage's method (all products < 2^31 * 40692 — trap-safe)
@@ -76,7 +90,10 @@ pub fn get(self: RandStream, lo: integer, hi: integer) -> integer? {
 }
 
 // A random permutation of [0, 1, ..., n-1] from THIS stream (Fisher-Yates), advancing
-// it. Empty when n is 0, negative or null (the same contract as rand_indices()).
+// it by exactly n - 1 draws. Empty when n is 0, negative or null (the same contract
+// as rand_indices()).
+// Example: @RND-003 — a shuffle is a countable number of draws, so inserting one
+// shifts the rest of the sequence by a known amount rather than adding noise.
 pub fn indices(self: RandStream, n: integer) -> vector<integer> {
   out: vector<integer> = [];
   if !n { return out; }

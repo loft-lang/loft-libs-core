@@ -1,0 +1,136 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for the `regex` library (@PLN141).  Each `test_*` below is a
+// REAL, run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @RGX-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling (no test carries
+// the tag).  These are teaching examples, distinct from the per-function
+// assertion suite in `regex.loft`.
+//
+// Every entry point here is `text` in and `integer`/`boolean` out, so the type
+// checker can see none of what follows: which spelling actually reaches this
+// library, which UNIT the offset is in, and that a broken pattern answers the
+// same thing as a pattern that simply did not match.
+//
+// The superseded `find` demonstrated by @RGX-001 is what the steer channel exists
+// to warn about, and the shadow it collides with is real — both are asserted here
+// rather than silenced, so this file goes red if either ever stops being true.
+// @EXPECT_WARNING: `find` is also a method on `text`
+// @EXPECT_WARNING: `split` is also a method on `text`
+use regex;
+
+// @RGX-001 — the spelling decides which library you called, and the wrong one
+// still compiles.  `find` and `split` are stdlib `text` METHODS (literal
+// substring search, character split), and loft resolves a method spelling before
+// a library's free function — so a bare `find(pattern, input)` does not reach
+// this library at all.  It type-checks, because the stdlib's `find` takes the
+// same two texts, and it answers by looking for the literal text `"[0-9]+"`
+// inside `"abc123"` — the arguments read the other way round — so it reports "not
+// found" for a pattern that plainly matches.  That is why this library's
+// recommended verbs are `search` / `split_on`, called subject-first on the text,
+// and why `regex::find` / `regex::split` survive only as `#superseded` spellings
+// reachable through the qualifier.
+fn test_the_spelling_decides_which_library_you_called() {
+  // The recommended form: subject-first, on the text.
+  assert("abc123".search("[0-9]+") == 3, "search finds the digits at byte 3");
+
+  // A bare `find` compiles and is NOT this library — the stdlib method wins, and
+  // it reads its arguments the other way round (needle in haystack).
+  bare = find("[0-9]+", "abc123");
+  assert(bare == null,
+         "bare find() looked for the literal \"[0-9]+\" INSIDE \"abc123\" and found nothing");
+  assert(bare != "abc123".search("[0-9]+"),
+         "so the two spellings answer differently on the same arguments");
+
+  // `matches` has no stdlib namesake, so its bare form is safe.
+  assert(matches("abc123", "[0-9]+"), "matches is collision-free and works bare");
+  assert("abc123".matches("[0-9]+"), "and as a method");
+}
+
+// @RGX-002 — `search` answers a BYTE offset, and it answers null on a miss even
+// though its type says `integer`.  Both halves bite.  The offset is right for
+// slicing, because loft's text slicing is byte-indexed too — but `len()` counts
+// CHARACTERS, so comparing an offset against `len()` is a units error that only
+// shows up on non-ASCII input, silently and late.  `size()` is the byte count and
+// the one to compare against.  And because the declared return is non-null
+// `integer`, nothing makes a caller guard the miss: an unchecked offset flows on
+// as loft's null integer, and a negative index counts from the END of the text
+// rather than reading as absent.
+fn test_the_offset_is_bytes_and_the_miss_is_null() {
+  t = "héllo wörld";
+  assert(len(t) == 11, "eleven characters");
+  assert(size(t) == 13, "thirteen bytes — two of them are two-byte characters");
+
+  at = t.search("wörld");
+  assert(at == 7, "the answer is the BYTE offset, not the character index 6");
+  assert(at < len(t), "which happens to be true here...");
+  assert(at < size(t), "...but size() is the bound that is true in general");
+
+  // The offset is exactly what byte-indexed slicing wants.
+  assert(t[0..at] == "héllo ", "slicing with it lands on a character boundary");
+
+  // A miss is null, from a function declared to return `integer`.
+  miss = t.search("[0-9]+");
+  assert(miss == null, "no digits — the answer is null");
+  assert(!miss, "so `if !offset` is a valid guard");
+  assert(miss < 0, "and so is a `< 0` test — loft's null integer is i64::MIN");
+}
+
+// @RGX-003 — a broken pattern is not an error, it is a miss.  An invalid regex
+// (an unclosed class, a stray quantifier) does not raise and does not report
+// itself: `search` answers the same null it answers for text that simply does not
+// contain the pattern, and `matches` answers the same false.  So a typo in a
+// pattern — especially one built by interpolation from configuration or user
+// input — presents as "nothing matched today", which is indistinguishable from a
+// quiet input and survives every test written against matching input.  If a
+// pattern comes from outside the program, prove it matches something known before
+// trusting a negative answer from it.
+fn test_a_broken_pattern_reports_a_miss_not_an_error() {
+  good_miss = "abc".search("[0-9]+");     // valid pattern, no digits present
+  broken = "abc".search("[");             // unclosed character class
+  assert(good_miss == null, "a genuine miss is null");
+  assert(broken == null, "and so is a pattern that never compiled");
+  assert(broken == good_miss, "the caller cannot tell the two apart");
+
+  assert(!"abc".matches("[0-9]+"), "the boolean door: a genuine miss is false");
+  assert(!"abc".matches("["), "a broken pattern is false as well");
+
+  // The canary: check the pattern against input it MUST match.
+  suspect = "[0-9]+";
+  assert("0".matches(suspect), "a pattern proved against a known sample is one you can trust");
+}
+
+// @RGX-004 — `split_on` yields pieces, not fields, and it never yields none.  It
+// is a lazy `iterator<text>` over the gaps BETWEEN matches, so a separator at
+// either end produces an empty piece rather than being trimmed, and text with no
+// match at all comes back as a single piece — the whole input.  That last one is
+// the case a caller usually gets wrong: a split that "failed" still gives you one
+// element, so testing the piece count for zero never fires, and code that assumes
+// two pieces reads the whole line as its first field.
+fn test_split_yields_the_gaps_including_the_empty_ones() {
+  assert(wex_pieces("a,b,c") == "[a][b][c]", "the ordinary case: three pieces");
+  assert(wex_pieces("a,b,") == "[a][b][]", "a TRAILING separator leaves an empty piece");
+  assert(wex_pieces(",a") == "[][a]", "and a leading one leaves an empty piece first");
+  assert(wex_pieces("abc") == "[abc]", "no match at all is ONE piece — the whole input");
+  assert(wex_pieces("") == "[]", "even empty input yields one (empty) piece");
+
+  // So a count is never 0, and "did it split?" is a count > 1 question.
+  assert(wex_count("abc") == 1, "an unsplit line still has a piece");
+  assert(wex_count("a,b") == 2, "a split line has more than one");
+}
+
+// Render a split as `[piece][piece]…` so the expected value can be written out in
+// full rather than asserted one index at a time.
+fn wex_pieces(input: text) -> text {
+  out = "";
+  for p in input.split_on(",") { out = "{out}[{p}]"; }
+  out
+}
+
+// How many pieces a split yields.
+fn wex_count(input: text) -> integer {
+  n = 0;
+  for _ in input.split_on(",") { n += 1; }
+  n
+}

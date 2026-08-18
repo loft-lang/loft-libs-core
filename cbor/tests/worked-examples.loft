@@ -1,0 +1,135 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for the `cbor` library (@PLN141).  Each `test_*` below is a
+// REAL, run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @CBR-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling (no test carries
+// the tag).  These are teaching examples, distinct from the round-trip suite in
+// `cbor.loft`.
+//
+// This codec exists for signable records: the same value must always produce the
+// same bytes, because a signature is over the BYTES.  So the contracts that matter
+// are all about which loft-side choices reach the wire and which do not — and the
+// answers are not the obvious ones in either direction.
+use cbor;
+
+// Render bytes as hex so an expected encoding can be written out in full rather
+// than asserted one index at a time.
+fn wex_hex(b: vector<u8>) -> text {
+  s = "";
+  for x in b { s += "{x:02x}"; }
+  s
+}
+
+// @CBR-001 — canonical means the ORDER YOU BUILT THE MAP IN DOES NOT REACH THE
+// WIRE.  `encode` sorts a map's entries by their encoded key bytes (RFC 8949
+// §4.2.1) before emitting, so two maps built in different orders are byte-identical
+// afterwards.  That is the property the whole library is for: a signature over the
+// bytes stays valid no matter how the record was assembled, on any target, in any
+// version of your code that happens to add fields in a different order.  It also
+// means you must not treat the encoded order as your order — read a decoded map by
+// key, never by position.
+fn test_the_order_you_build_a_map_in_does_not_reach_the_wire() {
+  b_then_a = CMap { entries: [
+    CborEntry { key: CText { value: "b" }, value: CInt { value: 2 } },
+    CborEntry { key: CText { value: "a" }, value: CInt { value: 1 } },
+  ] };
+  a_then_b = CMap { entries: [
+    CborEntry { key: CText { value: "a" }, value: CInt { value: 1 } },
+    CborEntry { key: CText { value: "b" }, value: CInt { value: 2 } },
+  ] };
+  // a2 = map(2) ; 6161 = text "a" ; 01 ; 6162 = text "b" ; 02
+  assert(wex_hex(encode(a_then_b)) == "a2616101616202", "the canonical byte string");
+  assert(wex_hex(encode(b_then_a)) == wex_hex(encode(a_then_b)),
+         "and building it the other way round produces exactly the same bytes");
+
+  // Sorting is by the encoded KEY BYTES, so it is length-then-value, not the
+  // alphabetical order of the loft text: a shorter key sorts before a longer one.
+  short_long = CMap { entries: [
+    CborEntry { key: CText { value: "bb" }, value: CInt { value: 2 } },
+    CborEntry { key: CText { value: "a" }, value: CInt { value: 1 } },
+  ] };
+  // a2 | 6161 "a" | 01 | 626262 "bb" | 02
+  assert(wex_hex(encode(short_long)) == "a261610162626202",
+         "the one-byte key comes first because its ENCODING sorts first");
+}
+
+// @CBR-002 — `CBytes` and `CText` are different wire types, so the loft-side
+// choice is part of what gets signed.  The same two payload bytes encode with a
+// different head — `42` (major 2, a byte string of length 2) versus `62` (major 3,
+// a text string of length 2) — and a peer decoding the record sees a different
+// type, not a different spelling of the same thing.  This is the whole reason to
+// reach for CBOR over JSON: a byte string is native here rather than base64 in a
+// text field, and picking the wrong one produces a valid record that means
+// something else.
+fn test_bytes_and_text_are_different_wire_types() {
+  as_text = CText { value: "hi" };
+  as_bytes = CBytes { value: [104 as u8, 105 as u8] };   // the same two bytes
+  assert(wex_hex(encode(as_text)) == "626869", "text: major 3, length 2, then 'hi'");
+  assert(wex_hex(encode(as_bytes)) == "426869", "bytes: major 2, same length, same payload");
+  assert(wex_hex(encode(as_text)) != wex_hex(encode(as_bytes)),
+         "identical payload, different records — a signature does not carry across");
+
+  // Integers use the shortest head that fits, which is what makes the form
+  // canonical, and negatives are their own major type rather than a sign bit.
+  assert(wex_hex(encode(CInt { value: 23 })) == "17", "0..23 ride inside the head byte");
+  assert(wex_hex(encode(CInt { value: 24 })) == "1818", "24 needs one more byte, and takes exactly one");
+  assert(wex_hex(encode(CInt { value: 0 - 1 })) == "20", "-1 is major 1, not a signed 0");
+}
+
+// @CBR-003 — `decode` answers one `ok=false` for four different problems, and one
+// of them will surprise you: it REJECTS well-formed CBOR that is not CANONICAL.
+// A permissive encoder elsewhere may write `1` as `18 01` (a valid long form);
+// this decoder refuses it, because accepting it would mean two byte strings decode
+// to one value and the signable-record property is gone.  Truncated input,
+// trailing bytes after the top-level value, and empty input are the other three,
+// and `ok=false` does not say which — so a failure is "these are not my bytes",
+// never a diagnosis.  Check `ok` before `value`; on failure `value` means nothing.
+fn test_decode_rejects_valid_but_non_canonical_input() {
+  canonical: vector<u8> = [1 as u8];
+  ok_one = decode(canonical);
+  assert(ok_one.ok, "the canonical encoding of 1 decodes");
+  assert(ok_one.next == 1, "and reports one byte consumed");
+
+  long_form: vector<u8> = [0x18 as u8, 1 as u8];   // valid CBOR for 1, not canonical
+  assert(!decode(long_form).ok, "the long form of 1 is REFUSED, not accepted as 1");
+
+  trailing: vector<u8> = [1 as u8, 1 as u8];
+  assert(!decode(trailing).ok, "a second value after the top-level one is refused");
+
+  truncated: vector<u8> = [0x18 as u8];            // head promises a byte that is not there
+  assert(!decode(truncated).ok, "truncated input is refused");
+
+  empty: vector<u8> = [];
+  assert(!decode(empty).ok, "and so is nothing at all");
+
+  // Whatever this codec writes, it reads.
+  round = decode(encode(CText { value: "hi" }));
+  assert(round.ok, "its own output always round-trips");
+}
+
+// @CBR-004 — canonical is about ORDER, not UNIQUENESS: a map with two entries
+// under the same key encodes without complaint and DECODES `ok=true`.  Nothing in
+// the codec is going to tell you that a record carries two values for one field,
+// and the duplicate survives a signature perfectly happily, so a reader that takes
+// the first match and a reader that takes the last disagree about a record both
+// consider valid.  Uniqueness is the caller's to enforce, before encoding.
+fn test_duplicate_keys_are_encoded_and_decoded_without_complaint() {
+  dup = CMap { entries: [
+    CborEntry { key: CText { value: "k" }, value: CInt { value: 1 } },
+    CborEntry { key: CText { value: "k" }, value: CInt { value: 2 } },
+  ] };
+  enc = encode(dup);
+  assert(wex_hex(enc) == "a2616b01616b02", "both entries are on the wire, in a stable order");
+  assert(decode(enc).ok, "and the decoder accepts them");
+
+  // The stable order is the point of the tie-break: a malformed map still encodes
+  // deterministically rather than dropping or duplicating an entry at random.
+  dup_other_way = CMap { entries: [
+    CborEntry { key: CText { value: "k" }, value: CInt { value: 2 } },
+    CborEntry { key: CText { value: "k" }, value: CInt { value: 1 } },
+  ] };
+  assert(wex_hex(encode(dup_other_way)) == "a2616b02616b01",
+         "equal keys keep their original relative order — deterministic, still wrong data");
+}

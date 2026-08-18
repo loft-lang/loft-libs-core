@@ -1,0 +1,119 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for the `zttext` library (@PLN141).  Each `test_*` below is a
+// REAL, run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @ZTX-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling (no test carries
+// the tag).  These are teaching examples, distinct from the per-function assertion
+// suite in `zttext.loft`.
+//
+// zttext is an ENGINE, so what needs demonstrating is not any single call but the
+// SHAPE of a correct one: an edit is a value you must keep, an offset is measured
+// in the unit the whole engine agrees on, undo is computed against the state
+// BEFORE the edit, and layout only works because measurement is handed in.
+use zttext;
+
+// @ZTX-001 — every edit RETURNS a new Doc and leaves the old one alone.
+// `insert_text`, `delete_range` and `set_style` are pure functions over an
+// immutable piece sequence, not mutators: the `Doc` you passed in is exactly as it
+// was afterwards.  So `insert_text(d, 0, "x", 0);` as a statement compiles, runs,
+// allocates the whole new document — and throws it away.  Nothing warns, because
+// discarding a return value is legal, and the symptom is an editor where typing
+// does nothing.  Bind the result, every time.  What you get for that discipline is
+// the reason the engine is built this way: the previous state is still a live
+// value, so undo, history and speculative edits are just variables you kept.
+fn test_an_edit_is_a_value_you_have_to_keep() {
+  base = doc_from_text("hello", 0);
+  extended = insert_text(base, 5, " world", 0);
+
+  assert(materialise(extended) == "hello world", "the RETURNED doc has the edit");
+  assert(materialise(base) == "hello", "and the one passed in is untouched");
+  assert(doc_len(base) == 5 && doc_len(extended) == 11, "two live documents, both valid");
+
+  // The shape that silently does nothing: the result is never bound.
+  insert_text(base, 0, "XYZ", 0);
+  assert(materialise(base) == "hello",
+         "a discarded edit is simply lost — no error, no warning, no change");
+
+  // Because the old state is still a value, keeping history costs nothing extra.
+  history = [base, extended];
+  assert(materialise(history[0] ?? empty_doc()) == "hello", "the earlier state is still there");
+}
+
+// @ZTX-002 — every offset in this engine is a CHARACTER position, never a byte,
+// and the buffer behind it is APPEND-ONLY.  The first half is a deliberate design
+// choice (the buffer is a `vector<character>`), and it is what makes an offset
+// safe on text loft would otherwise let you cut in half: `doc_len` counts
+// characters even when the text needs more bytes than that, and a range lands on
+// character boundaries by construction.  The second half is why a delete looks
+// like it leaked: removing a range rewrites the PIECE SEQUENCE and never touches
+// the buffer, so `doc_len` drops while the buffer stays exactly as long.  That is
+// not a leak, it is undo: the deleted characters are still there to be restored.
+fn test_offsets_are_characters_and_the_buffer_only_grows() {
+  d = doc_from_text("héllo wörld", 0);
+  assert(doc_len(d) == 11, "eleven CHARACTERS");
+  assert(size(materialise(d)) == 13, "thirteen bytes — two characters need two each");
+
+  // A character range cuts where you meant, including across a multi-byte char.
+  cut = delete_range(d, 0, 2);
+  assert(materialise(cut) == "llo wörld", "offsets 0..2 removed 'h' and 'é', not 'h' and half of 'é'");
+  assert(doc_len(cut) == 9, "nine characters left");
+
+  // The buffer did not shrink — the deleted characters are still available.
+  assert(len(cut.buf) == len(d.buf), "the append-only buffer is unchanged by a delete");
+  assert(len(d.buf) == 11, "it holds every character ever inserted");
+}
+
+// @ZTX-003 — undo is computed against the state BEFORE the edit, and it restores
+// styles, not just text.  `invert(pre, txn)` needs the pre-edit document because
+// the inverse of a deletion is an insertion of what was there — and "what was
+// there" only exists in the state before.  Handing it the post-state instead
+// compiles perfectly and produces a transaction that reinserts the wrong thing.
+// The payoff is the engine's central invariant: applying a transaction and then
+// its inverse returns a document equal to the original in text AND in per-character
+// style, which is what makes undo of a formatting change work at all.
+fn test_undo_is_inverted_against_the_state_before_the_edit() {
+  base = doc_from_text("hello world", 1);
+  styled = set_style(base, 0, 5, 7);          // "hello" now carries style 7
+  assert("{char_styles(styled)}" == "[7,7,7,7,7,1,1,1,1,1,1]", "five styled, six not");
+
+  edit = txn_of([ Del { from: 0, to: 5 } ]);
+  after = apply(styled, edit);
+  assert(materialise(after) == " world", "the edit removed the styled run");
+
+  // The inverse is taken against `styled` — the PRE state — not against `after`.
+  undo = invert(styled, edit);
+  restored = apply(after, undo);
+
+  assert(materialise(restored) == materialise(styled), "text is back");
+  assert("{char_styles(restored)}" == "{char_styles(styled)}",
+         "and so are the per-character styles — undo of a format change works");
+}
+
+// @ZTX-004 — layout takes MEASUREMENT as an argument, and that is the whole
+// portability story.  `flow_layout` and friends ask for a `resolve` (style id →
+// Style) and a `measure` (text + Style → width) rather than calling a font engine,
+// so the same document laid out with the same ports produces the same boxes on the
+// interpreter, on `--native`, in wasm and in a browser — the parity invariant is a
+// consequence of the signature, not a promise.  It also means a caller MUST supply
+// both: `default_resolver` and `mono_measure` are the deterministic pair to test
+// against, and swapping in a real font measurer changes the layout without changing
+// a line of engine code.
+fn test_layout_is_portable_because_measurement_is_an_argument() {
+  d = doc_from_text("alpha beta gamma delta", 0);
+
+  // mono_measure is width = characters * size, so at column width 12 the greedy
+  // line breaker fits "alpha beta" (10) but not "alpha beta gamma".
+  boxes = flow_layout(d, default_resolver, mono_measure, 12.0);
+  assert(len(boxes.boxes) == 6, "six boxes — one per word plus the spaces between");
+  assert(boxset_height(boxes) == 2.0, "two lines at the default size of 1.0");
+
+  lines = line_assignment(d, default_resolver, mono_measure, 12.0);
+  assert(len(lines) == 2, "and the line assignment agrees");
+
+  // A different measurer is a different layout, with no change to the document.
+  wide = flow_layout(d, default_resolver, mono_measure, 40.0);
+  assert(boxset_height(wide) == 1.0, "a wider column fits it all on one line");
+  assert(materialise(d) == "alpha beta gamma delta", "the document itself never moved");
+}

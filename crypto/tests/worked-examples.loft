@@ -1,0 +1,248 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for the `crypto` library (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a function whose correct use is not obvious from its
+// signature alone; the function documents itself by CITING the tag with
+// `// Example: @CRY-00N`, and `check_doc_drift.sh examples` fails if a citation goes
+// dangling (no test carries the tag).  These are teaching examples, distinct from the
+// known-answer suites in crypto.loft / ed25519.loft / es256.loft / aead_kex.loft /
+// hpke.loft, which pin the RFC vectors instead.
+//
+// Why this library owes them: every parameter and return here is `text`.  The type
+// checker cannot tell a message from the base64 of a message, a hex digest from a
+// base64 one, a 32-byte seed from a 64-byte key, or a "" that means "it failed" from a
+// "" that means "it was empty".  So every example below is a contract a caller can get
+// wrong while the program type-checks perfectly.
+//
+// Every value is bound to a LOCAL before it reaches a native call: a bare literal or a
+// function result handed straight through as a TEMPORARY hits a native store-lifetime
+// bug (the argument's pointer arrives null while its length survives).  That is the
+// convention in ed25519.loft and es256.loft too.
+use crypto;
+
+// @CRY-001 — two hashing doors, and why there are two.  `sha256` takes loft `text` and
+// answers a 64-character lowercase HEX digest; `sha256_b64` takes the BASE64 of a raw
+// byte string and answers the BASE64 of the same 32-byte digest.  Both hash bytes the
+// same way — they differ only in how the input arrives and how the output is spelled,
+// and nothing in `text -> text` says which one you are holding.  Reach for `sha256_b64`
+// whenever what you are hashing is not valid UTF-8 (a ciphertext, a canonical CBOR
+// record): such a byte string cannot ride as `text` at all, so `sha256` cannot see it.
+// `bytes_to_base64` / `base64_to_bytes` are the bridge to a `vector<u8>` — READ the
+// decoded vector (index it, iterate it, pass it on); never make it the left side of
+// `+=`, which corrupts after a later store allocation.
+fn test_hash_text_versus_bytes() {
+  // The same input through both doors.
+  text_in = "hello";
+  hex = crypto::sha256(text_in);
+  assert(hex == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+         "sha256 answers HEX: {hex}");
+  bytes_in = crypto::base64_encode(text_in);
+  b64 = crypto::sha256_b64(bytes_in);
+  assert(b64 == "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=",
+         "sha256_b64 answers BASE64 of the same 32 bytes: {b64}");
+  // The difference a caller trips over: 64 hex characters against a 32-byte digest.
+  // Comparing one spelling to the other can never match.
+  digest_bytes = crypto::base64_to_bytes(b64);
+  assert(len(hex) == 64, "the hex digest is 64 characters");
+  assert(len(digest_bytes) == 32, "the base64 digest decodes to 32 bytes");
+  assert(hex != b64, "two spellings of one digest are not equal");
+  // A byte string that is NOT valid UTF-8 (here the single byte 0xff) can only be
+  // hashed through the base64 door: `text` is UTF-8-validated, so it cannot carry it.
+  raw = crypto::bytes_to_base64([255 as u8]);
+  assert(raw == "/w==", "raw bytes cross the boundary as base64: {raw}");
+  raw_digest = crypto::sha256_b64(raw);
+  assert(raw_digest == "qBAK5qoZQNC2Y7sxzUZhQuu9vVGHExuS2TgYmHgy64k=",
+         "sha256 of the byte 0xff: {raw_digest}");
+}
+
+// @CRY-002 — sign the BASE64 of your message, never the message.  Every Ed25519
+// argument is base64 of bytes: the secret key is the RFC 8032 32-byte SEED (not a
+// 64-byte expanded key), the public key comes from `ed25519_public_key`, and the
+// message goes in as `base64_encode(msg)`.  Handing the message text straight in
+// type-checks and signs whatever bytes that text happens to decode to as base64 — and
+// it stays silent, because verifying with the SAME wrong spelling still succeeds.  Only
+// a peer that spelled it correctly ever sees the mismatch.  Malformed input never
+// halts: both producers answer "" and `ed25519_verify` answers false, so an unchecked
+// "" is a signature you never made.
+fn test_ed25519_sign_the_base64_of_the_message() {
+  seed = "TM0Imyj/ltqdtsNG7BFOD1uKMZ81q6Yk2oz27U+4pvs=";   // RFC 8032 §7.1 TEST 2 seed
+  pk = crypto::ed25519_public_key(seed);
+  assert(pk == "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=",
+         "the 32-byte seed derives the public key: {pk}");
+  // Correct: the message "test" carried as base64.
+  msg = crypto::base64_encode("test");
+  assert(msg == "dGVzdA==", "base64_encode is the bridge: {msg}");
+  sig = crypto::ed25519_sign(seed, msg);
+  ok = crypto::ed25519_verify(pk, msg, sig);
+  assert(ok, "the signature verifies over the message bytes");
+  // The trap: "test" is itself valid base64 (four characters), so passing it as the
+  // message signs the three bytes b5 eb 2d instead of the four bytes of "test".
+  wrong = "test";
+  sig_wrong = crypto::ed25519_sign(seed, wrong);
+  assert(sig_wrong != "", "the wrong call does not fail — it signs different bytes");
+  assert(sig_wrong != sig, "so it is a different signature: {sig_wrong}");
+  self_ok = crypto::ed25519_verify(pk, wrong, sig_wrong);
+  assert(self_ok, "and it verifies against itself — invisible inside one program");
+  peer_ok = crypto::ed25519_verify(pk, msg, sig_wrong);
+  assert(!peer_ok, "only a peer that spelled the message correctly sees the mismatch");
+  // Soft failure: a wrong-length seed answers "" rather than halting.
+  short = "dG9vc2hvcnQ=";
+  none = crypto::ed25519_sign(short, msg);
+  assert(none == "", "a bad key answers an empty signature — test for it");
+}
+
+// @CRY-003 — ES256 is DETERMINISTIC, and its encodings are the flat JOSE ones.  Signing
+// follows RFC 6979, so one key and one message always answer the same bytes: two
+// signatures differing is a bug, not fresh randomness, and `ecdsa_p256_keygen` is the
+// only call here that draws entropy.  Nothing in `text -> text` says which encoding it
+// wants, and ES256 wants the JOSE forms throughout: the secret key is the bare 32-byte
+// scalar `d`, the public key is the 64-byte affine point `x || y` with NO 0x04 SEC1
+// prefix, and a signature is the 64-byte raw `r || s` — not DER, which belongs to the
+// X.509 / PKCS#10 layer.  Feed a DER signature or an 0x04-prefixed key and you get
+// `false` / "" with nothing naming the reason, so check the three lengths.
+fn test_es256_deterministic_and_jose_shaped() {
+  sk = crypto::ecdsa_p256_keygen();
+  sk_bytes = crypto::base64_to_bytes(sk);
+  assert(len(sk_bytes) == 32, "the secret key is the bare 32-byte scalar d");
+  pk = crypto::ecdsa_p256_public_key(sk);
+  pk_bytes = crypto::base64_to_bytes(pk);
+  assert(len(pk_bytes) == 64, "the public key is 64 bytes x||y — no 0x04 prefix");
+  msg = crypto::base64_encode("acme newOrder");
+  sig = crypto::ecdsa_p256_sign(sk, msg);
+  sig_bytes = crypto::base64_to_bytes(sig);
+  assert(len(sig_bytes) == 64, "the signature is 64 bytes r||s — not DER");
+  ok = crypto::ecdsa_p256_verify(pk, msg, sig);
+  assert(ok, "a fresh ES256 signature verifies");
+  // Deterministic: the same key and message sign to the identical bytes every time.
+  again = crypto::ecdsa_p256_sign(sk, msg);
+  assert(again == sig, "RFC 6979 — signing twice must answer the identical bytes");
+  // Only keygen draws entropy.
+  other = crypto::ecdsa_p256_keygen();
+  assert(other != sk, "keygen draws a fresh scalar per call");
+}
+
+// @CRY-004 — a Diffie-Hellman output is NOT a key.  `x25519_dh(mine, theirs)` answers
+// the raw 32-byte shared point and both sides compute the same one, but RFC 7748 §6.1
+// says never use it directly: run it through `hkdf_sha256` so the key depends on a salt
+// and a context `info`.  That `info` is what separates two keys derived from ONE shared
+// secret — a send key from a receive key, one protocol version from the next — and it
+// is the argument callers leave empty.  Use the split `hkdf_extract` / `hkdf_expand`
+// when one PRK feeds several Expands, or when the PRK is itself the value you want
+// (HPKE does both); the one-shot is exactly those two composed.  An EMPTY base64 salt
+// does not mean "no salt": it selects the RFC 5869 all-zero salt.
+fn test_x25519_then_hkdf_makes_the_key() {
+  // RFC 7748 §6.1, the Alice / Bob example.
+  alice_sk = "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=";
+  alice_pk = "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=";
+  bob_sk = "XasIfmJKikt54X+Lg4AO5m87sSkmGLb9HC+LJ/+I4Os=";
+  bob_pk = "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=";
+  mine = crypto::x25519_dh(alice_sk, bob_pk);
+  theirs = crypto::x25519_dh(bob_sk, alice_pk);
+  assert(mine == theirs, "both sides derive the same shared point");
+  // The DH output is input keying material, never the key itself.
+  salt = crypto::random_bytes(32);
+  info = crypto::base64_encode("loft session key v1");
+  key = crypto::hkdf_sha256(salt, mine, info, 32);
+  key_bytes = crypto::base64_to_bytes(key);
+  assert(len(key_bytes) == 32, "HKDF answers the 32-byte AEAD key");
+  assert(key != mine, "the key is derived from the shared point, never equal to it");
+  // A different `info` over the SAME shared secret is a different key: this is how one
+  // handshake yields several keys without a second exchange.
+  other_info = crypto::base64_encode("loft session key v2");
+  other = crypto::hkdf_sha256(salt, mine, other_info, 32);
+  assert(other != key, "info separates two keys from one shared secret");
+  // The one-shot IS Extract then Expand — reach for the halves when a PRK is reused.
+  prk = crypto::hkdf_extract(salt, mine);
+  prk_bytes = crypto::base64_to_bytes(prk);
+  assert(len(prk_bytes) == 32, "Extract answers the 32-byte PRK");
+  composed = crypto::hkdf_expand(prk, info, 32);
+  assert(composed == key, "hkdf_sha256 is hkdf_extract followed by hkdf_expand");
+}
+
+// @CRY-005 — AES-256-GCM: the tag rides inside the ciphertext, and "" from `open` means
+// AUTHENTICATION FAILED.  `aes256gcm_seal` answers base64 of the ciphertext WITH its
+// 16-byte tag appended, so the sealed blob is always 16 bytes longer than the plaintext
+// and `open` takes that whole blob — there is no separate tag argument to carry.  The
+// key is 32 bytes and the nonce is 12; a nonce MUST NOT repeat under one key, so draw a
+// fresh `random_bytes(12)` per message and send it alongside.  The `aad` is
+// authenticated but not encrypted, and must match EXACTLY on open.  The trap: `open`
+// answers "" for every failure — bad key, wrong nonce, altered aad, tampered tag — and
+// "" is also what an authentic EMPTY plaintext answers.  Treat "" as failure and carry
+// emptiness some other way.
+fn test_aes256gcm_seal_open_and_the_empty_answer() {
+  key = crypto::random_bytes(32);
+  nonce = crypto::random_bytes(12);
+  aad = crypto::base64_encode("v1|user-42");
+  pt = crypto::base64_encode("attack at dawn");
+  sealed = crypto::aes256gcm_seal(key, nonce, aad, pt);
+  // ciphertext || 16-byte tag — one blob, nothing separate to keep track of.
+  pt_bytes = crypto::base64_to_bytes(pt);
+  sealed_bytes = crypto::base64_to_bytes(sealed);
+  assert(len(sealed_bytes) == len(pt_bytes) + 16,
+         "sealed is the plaintext plus a 16-byte tag");
+  opened = crypto::aes256gcm_open(key, nonce, aad, sealed);
+  assert(opened == pt, "open recovers the plaintext");
+  // The aad is authenticated: change it and open refuses.
+  other_aad = crypto::base64_encode("v1|user-43");
+  denied = crypto::aes256gcm_open(key, nonce, other_aad, sealed);
+  assert(denied == "", "a changed aad fails authentication");
+  // A fresh nonce per message: the SAME plaintext seals to a different blob, which is
+  // what makes reusing one nonce under one key detectable as the mistake it is.
+  nonce2 = crypto::random_bytes(12);
+  sealed2 = crypto::aes256gcm_seal(key, nonce2, aad, pt);
+  assert(sealed2 != sealed, "a fresh nonce gives a fresh ciphertext for one plaintext");
+  opened2 = crypto::aes256gcm_open(key, nonce2, aad, sealed2);
+  assert(opened2 == pt, "and its own nonce opens it");
+  // The ambiguity: an authentic EMPTY plaintext opens to "" as well — the very answer a
+  // forgery gets.  "" is a failure signal, never data.
+  nonce3 = crypto::random_bytes(12);
+  empty_sealed = crypto::aes256gcm_seal(key, nonce3, aad, "");
+  empty_bytes = crypto::base64_to_bytes(empty_sealed);
+  assert(len(empty_bytes) == 16, "sealing nothing yields just the tag");
+  empty_opened = crypto::aes256gcm_open(key, nonce3, aad, empty_sealed);
+  assert(empty_opened == "", "an authentic empty plaintext is indistinguishable from a failure");
+}
+
+// @CRY-006 — HPKE seals to a public key alone, but the recipient needs THREE things
+// back: `enc`, the `ciphertext`, and the very same `info` and `aad` the sender used.
+// `hpke_seal_base` draws a fresh ephemeral key on every call, so `enc` differs each
+// time and MUST travel with the ciphertext — it cannot be cached, and it is not
+// derivable from the recipient key.  `info` binds the key schedule (a protocol or
+// version context) while `aad` binds this one message; both are authenticated, and
+// either one differing makes `hpke_open_base` answer "" with nothing saying which.
+// X25519 has no separate keygen, so a recipient public key is the secret scalar taken
+// against the RFC 7748 base point — the recipe below.  The `_deterministic` /
+// `_for_test` entry points exist only to pin the RFC 9180 vectors: they take the
+// ephemeral secret from the caller, so never reach for them in real code.
+fn test_hpke_transmit_enc_and_match_the_context() {
+  // The CFRG RFC 9180 vector's recipient key pair.
+  sk_r = "SXtFAmZM/qXVrws5k02sciQqdPhIBFHhrufWpTMgMz0=";
+  // Where a public key comes from: X25519 of the secret against the base point
+  // (0x09 followed by 31 zero bytes).
+  base_point = "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  pk_r = crypto::x25519_dh(sk_r, base_point);
+  assert(pk_r == "Qw9LmFlmUUWmsbonQCRIe9ZvA6LdV313U8aNfX0AwAw=",
+         "the secret scalar against the base point is the public key: {pk_r}");
+  info = crypto::base64_encode("loft/hpke demo v1");
+  aad = crypto::base64_encode("message 1");
+  pt = crypto::base64_encode("Beauty is truth, truth beauty");
+  sealed = crypto::hpke_seal_base(pk_r, info, aad, pt);
+  assert(sealed.enc != "", "seal answers the encapsulated key");
+  assert(sealed.ciphertext != "", "and the ciphertext");
+  // Opening needs both halves, plus the identical info and aad.
+  opened = crypto::hpke_open_base(sk_r, sealed.enc, info, aad, sealed.ciphertext);
+  assert(opened == pt, "the recipient recovers the plaintext");
+  // A fresh ephemeral key per call: `enc` differs every time, so it cannot be
+  // recomputed later — it travels with the ciphertext or the message is lost.
+  again = crypto::hpke_seal_base(pk_r, info, aad, pt);
+  assert(again.enc != sealed.enc, "each seal encapsulates a fresh ephemeral key");
+  assert(again.ciphertext != sealed.ciphertext, "so one plaintext seals differently");
+  // Mismatch either bound context and open answers "" — the same "" for both.
+  wrong_info = crypto::base64_encode("loft/hpke demo v2");
+  bad_info = crypto::hpke_open_base(sk_r, sealed.enc, wrong_info, aad, sealed.ciphertext);
+  assert(bad_info == "", "a different info fails the key schedule");
+  wrong_aad = crypto::base64_encode("message 2");
+  bad_aad = crypto::hpke_open_base(sk_r, sealed.enc, info, wrong_aad, sealed.ciphertext);
+  assert(bad_aad == "", "a different aad fails the AEAD");
+}

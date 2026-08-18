@@ -95,6 +95,7 @@ pub fn sha256(data: text) -> text {
 // SHA-256 of the RAW BYTES decoded from base64 `data_b64`. Returns base64 of the
 // 32-byte digest. Use this to hash arbitrary byte strings (ciphertext, canonical
 // CBOR) that are not valid UTF-8 and so cannot be passed to `sha256` as text.
+// Example: @CRY-001 — the two hashing doors: text in / hex out vs base64 both ways.
 pub fn sha256_b64(data_b64: text) -> text {
   sha256_b64_native(data_b64)
 }
@@ -134,12 +135,14 @@ pub fn ed25519_public_key(secret_key_b64: text) -> text {
 
 // Sign the base64 `message` bytes with the 32-byte secret seed (base64).
 // Returns the 64-byte signature, base64.
+// Example: @CRY-002 — sign `base64_encode(msg)`; the bare text signs other bytes, silently.
 pub fn ed25519_sign(secret_key_b64: text, message_b64: text) -> text {
   ed25519_sign_native(secret_key_b64, message_b64)
 }
 
 // Verify a signature over the base64 `message` bytes under a public key.
 // Returns true iff the signature is valid.
+// Example: @CRY-002 — why a wrongly-spelled message still verifies against itself.
 pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean {
   ed25519_verify_native(public_key_b64, message_b64, signature_b64)
 }
@@ -162,12 +165,14 @@ pub fn ecdsa_p256_keygen() -> text {
 }
 
 // Derive the 64-byte public key `x || y` (base64) from a 32-byte secret scalar (base64).
+// Example: @CRY-003 — the three JOSE lengths (32 / 64 / 64) a caller should check.
 pub fn ecdsa_p256_public_key(secret_key_b64: text) -> text {
   ecdsa_p256_public_key_native(secret_key_b64)
 }
 
 // Sign the base64 `message` bytes with the 32-byte secret scalar (base64).
 // Returns the 64-byte `r || s` signature (base64), deterministic per RFC 6979.
+// Example: @CRY-003 — signing twice answers identical bytes, and `r || s` is not DER.
 pub fn ecdsa_p256_sign(secret_key_b64: text, message_b64: text) -> text {
   ecdsa_p256_sign_native(secret_key_b64, message_b64)
 }
@@ -184,6 +189,8 @@ pub fn ecdsa_p256_verify(public_key_b64: text, message_b64: text, signature_b64:
 // 32-byte u-coordinate (base64).  Returns the raw 32-byte shared secret
 // (base64), or "" if either input is the wrong length.  Run the result
 // through `hkdf_sha256` before using it as a key (RFC 7748 §6.1).
+// Example: @CRY-004 — the DH output is keying material, not a key; and how to get a
+// public key out of a secret scalar (X25519 has no separate keygen).
 pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text {
   x25519_dh_native(secret_key_b64, public_key_b64)
 }
@@ -193,6 +200,7 @@ pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text {
 // Derive `length` bytes of output keying material from `ikm`, `salt`, and
 // `info` (each base64).  An empty base64 `salt` selects the all-zero salt.
 // Returns the base64 OKM, or "" if `length` exceeds 255*32 or is <= 0.
+// Example: @CRY-004 — `info` is what separates two keys from one shared secret.
 pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text {
   hkdf_sha256_native(salt_b64, ikm_b64, info_b64, length)
 }
@@ -201,6 +209,7 @@ pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: intege
 // An empty base64 `salt` selects the all-zero salt.  Use the Extract/Expand
 // halves directly (rather than `hkdf_sha256`) when a PRK is reused for several
 // Expands or when an Extract output is itself the value you want (e.g. HPKE).
+// Example: @CRY-004 — the split halves compose to exactly `hkdf_sha256`.
 pub fn hkdf_extract(salt_b64: text, ikm_b64: text) -> text {
   hkdf_extract_native(salt_b64, ikm_b64)
 }
@@ -232,6 +241,7 @@ pub fn bytes_to_base64(bytes: vector<u8>) -> text {
 
 // Raw bytes from standard base64.  Malformed / empty input -> empty vector.
 // See the CAUTION above: read the result, never `+=` onto it.
+// Example: @CRY-001 — reading a decoded byte vector, and hashing non-UTF-8 bytes.
 pub fn base64_to_bytes(b64: text) -> vector<u8> {
   base64_to_bytes_native(b64)
 }
@@ -245,6 +255,7 @@ pub fn base64_to_bytes(b64: text) -> vector<u8> {
 // Encrypt + authenticate `plaintext` under `key`/`nonce`, binding `aad`.
 // Returns base64 of ciphertext WITH the 16-byte tag appended, or "" on bad
 // key/nonce length.
+// Example: @CRY-005 — the tag rides in the blob, and a fresh nonce per message.
 pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text {
   aes256gcm_seal_native(key_b64, nonce_b64, aad_b64, plaintext_b64)
 }
@@ -252,6 +263,7 @@ pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b
 // Verify + decrypt `ciphertext` (ciphertext||tag, base64) under `key`/`nonce`,
 // binding `aad`.  Returns the base64 plaintext, or "" on ANY authentication
 // failure — an empty result means the ciphertext/tag/aad did not verify.
+// Example: @CRY-005 — "" is a failure signal, and an authentic empty plaintext gives it too.
 pub fn aes256gcm_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text {
   aes256gcm_open_native(key_b64, nonce_b64, aad_b64, ciphertext_b64)
 }
@@ -442,6 +454,7 @@ fn seal_with_context(shared_secret_b64: text, enc_b64: text, info_b64: text, aad
 // binding `info` (key-schedule context) and `aad` (per-message AAD).  Generates
 // a fresh ephemeral key, so each call's output differs.  All args/fields base64.
 // Returns HpkeSealed { enc, ciphertext }; both "" on failure.
+// Example: @CRY-006 — `enc` is fresh per call and must travel with the ciphertext.
 pub fn hpke_seal_base(pk_r_b64: text, info_b64: text, aad_b64: text, pt_b64: text) -> HpkeSealed {
   sk_e_b64 = random_bytes(32);
   (shared_secret, enc) = dhkem_encap_deterministic(pk_r_b64, sk_e_b64);
@@ -461,6 +474,7 @@ pub fn hpke_seal_base_deterministic(pk_r_b64: text, sk_e_b64: text, info_b64: te
 // HPKE OpenBase (RFC 9180 §6.1): decrypt `ct` for recipient secret key `sk_r`
 // using the sender's `enc`, binding `info` and `aad`.  All args base64.  Returns
 // the base64 plaintext, or "" on ANY failure (bad enc/key or AEAD auth failure).
+// Example: @CRY-006 — `info` AND `aad` must both match the sender's, or open gives "".
 pub fn hpke_open_base(sk_r_b64: text, enc_b64: text, info_b64: text, aad_b64: text, ct_b64: text) -> text {
   shared_secret = dhkem_decap(enc_b64, sk_r_b64);
   if shared_secret == "" { return ""; }

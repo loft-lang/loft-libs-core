@@ -1,0 +1,133 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for the `random` library (@PLN141).  Each `test_*` below is a
+// REAL, run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @RND-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling (no test carries
+// the tag).  These are teaching examples, distinct from the per-function assertion
+// suites in `15-random.loft` and `16-randstream.loft`.
+//
+// The library offers the same three operations twice — once on a hidden global
+// generator, once on a `RandStream` you own — and the whole question is which one
+// a given call site needs.  Nothing in the types distinguishes them, and the two
+// differ in exactly the way that matters: whether some OTHER call site can change
+// what you get.
+//
+// The assertions below compare streams against each other rather than against
+// hard-coded draws.  That is the honest oracle here: the contract is "these two
+// sequences agree" / "this one moved", never "the third value is 313456", and
+// pinning the constants would pin the algorithm the docs call an implementation
+// detail.
+use random;
+
+// A callee that draws: the parameter example below needs a real call boundary,
+// not an inline block.
+fn wex_draw(r: RandStream) -> integer {
+  r.get(0, 1000000) ?? 0
+}
+
+// @RND-001 — `rand_seed` does NOT make the sequence yours.  The global tier is one
+// hidden generator shared by every call site in the process, so seeding it fixes
+// the sequence the GENERATOR produces, not the sequence YOU receive: one `rand()`
+// from anywhere else — a library you called, a logging helper, a second feature
+// added next month — consumes a value and shifts everything after it.  The symptom
+// is the worst kind: a program that is reproducible until it is not, with nothing
+// at the call site changed.  `seed_stream` answers a stream you own, and no other
+// call site can reach it.  Reach for the global for casual, throwaway randomness;
+// reach for a stream the moment reproducibility is a requirement.
+fn test_seeding_the_global_does_not_make_it_yours() {
+  // Baseline: seed, take two draws, nothing else in between.
+  random::rand_seed(42);
+  clean_first = random::rand(0, 1000000) ?? 0;
+  clean_second = random::rand(0, 1000000) ?? 0;
+
+  // Same seed, same two draws — but one foreign call slipped in between.
+  random::rand_seed(42);
+  mine_first = random::rand(0, 1000000) ?? 0;
+  random::rand(0, 5);                       // somebody else's die roll
+  mine_second = random::rand(0, 1000000) ?? 0;
+
+  assert(mine_first == clean_first, "the first draw still matches — the damage is downstream");
+  assert(mine_second != clean_second,
+         "the second does NOT: a foreign draw consumed the value that was going to be mine");
+
+  // The same interruption against a stream you own changes nothing.
+  own = random::seed_stream(42);
+  own_first = own.get(0, 1000000) ?? 0;
+  own_second = own.get(0, 1000000) ?? 0;
+  replay = random::seed_stream(42);
+  r_first = replay.get(0, 1000000) ?? 0;
+  random::rand(0, 5);                       // the same foreign call
+  random::rand_seed(999);                   // and a foreign RESEED, for good measure
+  r_second = replay.get(0, 1000000) ?? 0;
+  assert(r_first == own_first && r_second == own_second,
+         "a RandStream is untouched by anything happening on the global one");
+}
+
+// @RND-002 — assigning a stream COPIES it; passing one to a function LINKS it.
+// The two are opposite, and the type is `RandStream` either way.  `r2 = r1` forks:
+// both replay the same sequence from that point, so it is how you checkpoint a
+// stream before a speculative run — and it is also how you accidentally end up with
+// two "different" streams handing out identical numbers.  A `RandStream` PARAMETER
+// is a store link, so a callee's draw advances the caller's stream: that is what
+// makes `r.get(...)` work as a method at all, and it means a helper that draws is
+// spending your sequence, not its own.
+fn test_assignment_forks_a_stream_but_a_parameter_shares_it() {
+  r1 = random::seed_stream(9);
+  r2 = r1;                                  // a COPY, taken before any draw
+  a1 = r1.get(0, 1000000) ?? 0;
+  b1 = r2.get(0, 1000000) ?? 0;
+  a2 = r1.get(0, 1000000) ?? 0;
+  assert(b1 == a1, "the copy replays from where it was taken — it is a snapshot");
+  assert(a2 != a1, "while the original has moved on");
+  b2 = r2.get(0, 1000000) ?? 0;
+  assert(b2 == a2, "the fork keeps producing the same sequence, independently");
+
+  // A parameter is the other way round: the callee draws from YOUR stream.
+  caller = random::seed_stream(9);
+  oracle = random::seed_stream(9);
+  expect_first = oracle.get(0, 1000000) ?? 0;
+  expect_second = oracle.get(0, 1000000) ?? 0;
+  got_inside = wex_draw(caller);
+  got_after = caller.get(0, 1000000) ?? 0;
+  assert(got_inside == expect_first, "the callee drew the caller's next value");
+  assert(got_after == expect_second,
+         "and the caller's stream ADVANCED — a helper that draws spends your sequence");
+}
+
+// @RND-003 — a stream's position is state you can count, which is what makes
+// replay work in practice.  Equal seeds replay exactly, so a recorded seed is a
+// recorded run.  But every draw moves the stream, including the ones you did not
+// write as `get`: `indices(n)` runs a Fisher-Yates shuffle and therefore consumes
+// exactly `n - 1` draws.  So inserting a shuffle into a sequence does not add
+// noise, it shifts everything after it by a known amount — which is why a replay
+// that "drifted" is usually a draw someone added, not a broken seed, and why a
+// stream used for level generation should not be the one used for combat.
+fn test_every_draw_moves_the_stream_including_a_shuffle() {
+  // Equal seeds replay exactly.
+  a = random::seed_stream(3);
+  b = random::seed_stream(3);
+  for _ in 0..5 {
+    assert((a.get(0, 1000000) ?? 0) == (b.get(0, 1000000) ?? 0), "equal seeds replay exactly");
+  }
+
+  // indices(5) costs 5 - 1 = 4 draws, no more and no less.
+  via_shuffle = random::seed_stream(3);
+  via_shuffle.indices(5);
+  after_shuffle = via_shuffle.get(0, 1000000) ?? 0;
+
+  via_draws = random::seed_stream(3);
+  for _ in 0..4 { via_draws.get(0, 1000000); }
+  after_draws = via_draws.get(0, 1000000) ?? 0;
+  assert(after_shuffle == after_draws, "a shuffle of 5 is exactly four draws' worth of stream");
+
+  // And it really is a permutation, not a sample.
+  perm = random::seed_stream(3).indices(5);
+  assert(len(perm) == 5, "one entry per index");
+  seen = 0;
+  for want in 0..5 {
+    for got in perm { if got == want { seen += 1; } }
+  }
+  assert(seen == 5, "every index 0..4 appears exactly once");
+}

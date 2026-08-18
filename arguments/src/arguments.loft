@@ -103,12 +103,14 @@ pub fn option(self: Args, opt_short: text, opt_long: text, arg_name: text, desc:
 }
 
 // A required value option: `parse` fails if it is absent.
+// Example: @ARG-004 — the parse-failure idiom (`ok`/`error_msg`/`try_help`).
 pub fn required(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text) {
   self.register(opt_short, opt_long, arg_name, ArgKind.Value, true, desc);
 }
 
 // An optional-argument option: its value attaches only via `=` / glued form
 // (`--color=auto`, `-cauto`); given bare (`--color`) it is present with value "".
+// Example: @ARG-002 — glued value vs bare, and why the next word stays a positional.
 pub fn optional(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text) {
   self.register(opt_short, opt_long, arg_name, ArgKind.Optional, false, desc);
 }
@@ -125,6 +127,7 @@ pub fn set_epilog(self: Args, epilog: text) { self.epilog = epilog; }
 // Opt-in: register `--help`/`-h` and `--version`/`-V` (short forms only when free),
 // so `parse` records `--help`/`--version` and `help()` lists them.  Nothing is
 // auto-printed — the caller checks `wants_help()` / `wants_version()`.
+// Example: @ARG-003 — the opt-in dance, and `--help` bypassing the required check.
 pub fn enable_help(self: Args) {
   self.help_enabled = true;
   hshort = if self.short_taken("h") { "" } else { "h" };
@@ -275,6 +278,10 @@ fn classify(self: Args, argv: vector<text>) -> vector<Tok> {
 
 // --- Parsing: cursor/match-PEG driver over the token stream ---
 
+// Parse a command line against the declared options.  Answers false on a usage
+// error (see `ok`/`error_msg`); afterwards flags read through `has`, value options
+// through `get`, and every non-option word lands in `positionals` in order.
+// Example: @ARG-001 — the declare → parse → query lifecycle.
 pub fn parse(self: Args, argv: vector<text>) -> boolean {
   self.err = "";
   self.want_help = false;

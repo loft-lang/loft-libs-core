@@ -7,7 +7,7 @@ fn main() {
   // --- rand: values stay within [lo, hi] ---
   random::rand_seed(42);
   ok = true;
-  for i in 0..200 {
+  for _ in 0..200 {
     r = random::rand(10, 20);
     if r < 10 || r > 20 {
       ok = false;
