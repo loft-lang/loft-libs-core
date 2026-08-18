@@ -1,6 +1,6 @@
 [package]
 name = "cbor"
-version = "0.1.3"
+version = "0.1.4"
 description = "Canonical CBOR (RFC 8949) in pure loft — deterministic bytes for signable records"
 loft = ">=0.8"
 api_compatible_with  = "0.1.1"   # oldest own release this is a drop-in for
