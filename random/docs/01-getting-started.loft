@@ -1,0 +1,199 @@
+// Copyright (c) 2024-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Random numbers in two tiers — the shared generator, and a stream you own.
+//
+// `random` gives a loft program pseudo-random integers and random orderings, in
+// two tiers: `rand` / `rand_seed` / `rand_indices` draw from one generator the
+// whole process shares, and a `RandStream` is an independent stream you own and
+// carry as a plain struct. Choosing between them is the whole decision, and the
+// last section is about what happens when you choose wrong.
+//
+// It is not a source of cryptographic randomness. A key, a nonce or a salt must
+// come from the operating system, which is `crypto::random_bytes(n)` — the
+// generators here are fast and reproducible, and reproducible is exactly what a
+// secret must never be. It is not a noise or procedural-texture library either:
+// it hands you numbers, not fields.
+//
+// Install it once, then import it:
+//
+//   loft install random
+//
+// ## The smallest thing that does something
+//
+// Seed the shared generator, then roll a die:
+use random;
+
+fn main() {
+  rand_seed(42);
+  roll = rand(1, 6);
+  println("rolled {roll}");
+  assert(roll >= 1 && roll <= 6, "a die roll is 1..6, got {roll}");
+
+  // Every section below is a function and `main` calls each one. A section `main`
+  // does not call still COMPILES — so a renamed API would still be caught while
+  // its assertions, the half that checks the example is RIGHT rather than merely
+  // spelled correctly, silently never run.
+  reproducing();
+  shuffling();
+  owning_a_stream();
+  the_surprise();
+}
+
+// That prints:
+//
+//     rolled 2
+//
+// ## Reproducing a run
+//
+// The generator starts from a fixed default seed, so a program that never calls
+// `rand_seed` still produces the same numbers on every run. Seed it explicitly
+// when the sequence has to be pinned to something you recorded — a test, or a
+// level a player can share.
+
+fn reproducing() {
+  rand_seed(0);
+  a = rand(0, 999);
+  rand_seed(0);
+  assert(rand(0, 999) == a, "the same seed reproduces the sequence");
+
+  // `rand` answers null rather than crashing when the range is empty, so an
+  // inverted range is something you can test for with `!`.
+  assert(!rand(10, 5), "an inverted range is null, not an error");
+}
+
+// ## Random ordering, and sampling without replacement
+//
+// `rand_indices(n)` answers `0, 1, ..., n-1` in a random order — a permutation,
+// not a sample with repeats. It is the one to reach for when you want to visit a
+// collection in random order, because it shuffles INDICES and leaves the
+// collection itself alone.
+
+fn shuffling() {
+  rand_seed(7);
+  order = rand_indices(5);
+  assert(len(order) == 5, "rand_indices(5) has five entries");
+
+  // Every value 0..4 appears exactly once. Mark each position as seen to prove it.
+  seen = [for _ in 0..5 { false }];
+  for idx in order {
+    seen[idx] = true
+  }
+  all_seen = true;
+  for s in seen {
+    if !s {
+      all_seen = false
+    }
+  }
+  assert(all_seen, "a permutation covers every position exactly once");
+
+  // Take the first k entries of a shuffled index vector to pick k distinct items.
+  items = ["apple", "banana", "cherry", "date", "elderberry"];
+  rand_seed(1);
+  indices = rand_indices(len(items));
+
+  // On null-flow, because this trips people once: indexing a vector by a VARIABLE
+  // (`indices[i]`) answers a nullable element — `text?` — since the compiler
+  // cannot prove the index is in range. Appending a `text?` to the non-null
+  // `picked` would change its type, so supply a fallback with `?? ""`. The value
+  // is never actually null here.
+  picked = "";
+  for i in 0..3 {
+    if i > 0 {
+      picked += ", "
+    }
+    picked += items[indices[i]] ?? ""
+  }
+  assert(len(picked) > 0, "three distinct fruits in a random order: {picked}");
+
+  // The same guard for numbers — `?? 0` when accumulating through a variable index.
+  values = [10, 20, 30, 40, 50];
+  total = 0;
+  for i in order {
+    total += values[i] ?? 0
+  }
+  assert(total == 150, "each value summed exactly once: {total}");
+}
+
+// ## A stream you own
+//
+// The moment reproducibility is a REQUIREMENT rather than a convenience, stop
+// using the shared generator. `seed_stream(seed)` answers a `RandStream`: an
+// independent, deterministic stream that is a plain struct, so it saves, replays
+// and travels with the rest of your state. `r.get(lo, hi)` and `r.indices(n)` are
+// the stream's own versions of `rand` and `rand_indices`, with the same contracts.
+//
+// Two streams in one program never disturb each other, which is what lets a game
+// keep level generation and combat on separate streams: a change to one cannot
+// shift the other's numbers.
+
+fn owning_a_stream() {
+  world = seed_stream(2026);
+  combat = seed_stream(7);
+
+  layout = world.get(1, 100) ?? 0;
+  attack = combat.get(1, 20) ?? 0;      // does not disturb `world`
+  layout2 = world.get(1, 100) ?? 0;
+  assert(layout >= 1 && layout <= 100, "in range: {layout}");
+  assert(layout2 >= 1 && layout2 <= 100, "in range: {layout2}");
+  assert(attack >= 1 && attack <= 20, "in range: {attack}");
+
+  // Equal seeds give equal streams, so a recorded seed is a recorded run.
+  replay = seed_stream(2026);
+  assert(replay.get(1, 100) == layout, "a stream replays exactly");
+
+  // And a shuffled deck, from this stream alone.
+  deck = combat.indices(52);
+  assert(len(deck) == 52, "a full deck");
+}
+
+// ## The one that surprises people
+//
+// A `RandStream` behaves in two opposite ways depending on how it moves, and the
+// type is `RandStream` in both cases:
+//
+//   - **Assigning one COPIES it.** `r2 = r1` forks — both replay the same
+//     sequence from that point. That is how you checkpoint a stream before a
+//     speculative run, and also how you end up with two "different" streams
+//     handing out identical numbers.
+//   - **Passing one to a function LINKS it.** A struct parameter is a store link,
+//     so the callee's draw advances YOUR stream. That is what makes `r.get(...)`
+//     work as a method at all, and it means a helper that draws is spending your
+//     sequence, not its own.
+
+fn draw_one(r: RandStream) -> integer {
+  r.get(0, 1000000) ?? 0
+}
+
+fn the_surprise() {
+  r1 = seed_stream(9);
+  r2 = r1;                        // a COPY, taken before any draw
+  a1 = r1.get(0, 1000000) ?? 0;
+  b1 = r2.get(0, 1000000) ?? 0;
+  assert(b1 == a1, "the fork replays from where it was taken");
+  a2 = r1.get(0, 1000000) ?? 0;
+  assert(a2 != a1, "while the original has moved on");
+
+  // A parameter is the other way round: the callee draws from the caller's stream.
+  caller = seed_stream(9);
+  oracle = seed_stream(9);
+  expect_first = oracle.get(0, 1000000) ?? 0;
+  expect_second = oracle.get(0, 1000000) ?? 0;
+  inside = draw_one(caller);
+  after = caller.get(0, 1000000) ?? 0;
+  assert(inside == expect_first, "the callee drew the caller's next value");
+  assert(after == expect_second, "and the caller's stream advanced with it");
+
+  // The same asymmetry is why `rand_seed` is weaker than it looks: it fixes what
+  // the shared GENERATOR produces, not what you receive. One `rand()` from
+  // anywhere else in the process shifts everything after it. A stream has no
+  // "anywhere else".
+}
+
+// ## Where to go next
+//
+// The API reference lists every signature with its contract. The package's own
+// tests are the best-explained calls in it — `tests/worked-examples.loft` carries
+// `@RND-001` (why a seeded global sequence is not yours), `@RND-002` (the fork /
+// link asymmetry above) and `@RND-003` (a shuffle of n costs exactly n-1 draws,
+// so inserting one shifts the rest by a known amount).
