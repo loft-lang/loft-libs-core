@@ -119,11 +119,18 @@ pub fn split(pattern: text, input: text) -> iterator<text> {
 }
 #superseded "split_on"
 
+// `find` as a METHOD on the text, for a caller that prefers `s.regex_find(p)`.
+// Superseded by the stdlib's `search`, which is the same operation without an
+// import — the prefix exists only because a bare `find` resolves to the
+// stdlib's method first.
 pub fn regex_find(self: text, pattern: text) -> integer {
   self.search(pattern)
 }
 #superseded "search"
 
+// `split` as a method, and superseded by `split_on` for the same reason.  The
+// distinction that matters: this splits on a PATTERN, while the stdlib's bare
+// `split` splits on a character.
 pub fn regex_split(self: text, pattern: text) -> iterator<text> {
   yield from self.split_on(pattern);
 }

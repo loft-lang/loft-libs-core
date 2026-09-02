@@ -15,6 +15,33 @@
 // lexes each argv element into a `Tok` (using the option table), then a cursor
 // `match` drives the token stream — the `[ NeedVal, Pos ]` vs `[ NeedVal ]`
 // sequence decides whether an option consumes the following word.
+//
+// --- Using it ---
+//
+//     a = arguments::create("pack", "1.2.0", "Bundle a directory into an archive.");
+//     a.enable_help();                                  // wires --help / --version
+//     a.flag("v", "verbose", "explain what is being done");
+//     a.option("o", "output", "FILE", "write the archive here");
+//     a.required("f", "format", "FMT", "zip or tar");
+//
+//     if !a.parse(argv) {
+//       print("{a.error_msg()}\n{a.try_help()}\n");
+//       return;
+//     }
+//     if a.wants_help() { print(a.help()); return; }
+//
+//     a.has("verbose")                 // -> true, given -v
+//     a.get_or("format", "?")          // -> "tar", given --format=tar
+//     a.get_or("output", "-")          // -> "site.tar", given --out site.tar
+//
+// That last line is the prefix abbreviation at work: `--out` is unambiguous among
+// the declared long names, so it reaches `--output`.  Everything is queried by the
+// LONG name, whatever spelling the user typed — `-v`, `--verb` and `--verbose` all
+// answer `has("verbose")`.
+//
+// `parse` answers false only for a real error (a missing required option, an
+// unknown one, an ambiguous prefix); `--help` is a successful parse that sets
+// `wants_help()`, so check that before doing any work.
 
 // A declared option's shape.  `Flag` takes no value; `Value` requires one
 // (`--out x` / `--out=x` / `-ox`); `Optional` accepts one only when glued
@@ -72,6 +99,9 @@ const HELP_COL = 29;
 // The total help line width descriptions wrap at.
 const HELP_WIDTH = 79;
 
+// Start an empty parser.  The three strings are what `help()` and
+// `version_text()` render — nothing else reads them, so they are for the user
+// and not for the parsing.
 pub fn create(name: text, version: text, description: text) -> Args {
   Args {
     name: name, version: version, description: description,
@@ -356,6 +386,9 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
 
 // --- Querying results ---
 
+// Was this option given?  Ask by the LONG name whatever the user typed — a
+// short, a prefix and the full name all land on the same option.  The one
+// question a `flag` can be asked.
 pub fn has(self: Args, name: text) -> boolean {
   for ho in self.options {
     if ho.long_name == name {
@@ -367,6 +400,8 @@ pub fn has(self: Args, name: text) -> boolean {
   false
 }
 
+// The option's value, or null when it was not given.  `get_or` and `get_int`
+// are this with the absent case already handled, and are usually what you want.
 pub fn get(self: Args, name: text) -> text? {
   for go in self.options {
     if go.long_name == name {
@@ -390,14 +425,22 @@ pub fn get_int(self: Args, name: text) -> integer? {
   (gv ?? "") as integer?
 }
 
+// Did the parse succeed?  The same answer `parse` returned, available later —
+// so a caller that dropped the return value can still ask.
 pub fn ok(self: Args) -> boolean { self.err.len() == 0 }
 
+// What went wrong, in GNU wording and ready to print.  Empty when nothing did.
+// Pair it with `try_help()`, which is the second line of that pair.
 pub fn error_msg(self: Args) -> text { self.err }
 
+// Did the user ask for `--help`?  A SUCCESSFUL parse sets this, so check it
+// before acting on the options — otherwise `--help` runs the program.
 pub fn wants_help(self: Args) -> boolean { self.want_help }
 
+// The same for `--version`; print `version_text()` and stop.
 pub fn wants_version(self: Args) -> boolean { self.want_version }
 
+// The conventional one-line version banner, built from what `create` was told.
 pub fn version_text(self: Args) -> text { "{self.name} {self.version}" }
 
 // The GNU "Try '<prog> --help' …" hint to print alongside a parse error.

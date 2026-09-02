@@ -56,6 +56,8 @@ fn buf_slice_text(buf: vector<character>, start: integer, count: integer) -> tex
   return out;
 }
 
+// A document with no text.  The starting point every edit sequence builds from,
+// and what an undo to the beginning arrives at.
 pub fn empty_doc() -> Doc { return Doc { buf: [], pieces: [] }; }
 
 // build a one-piece doc holding `s` at style-id `style`.
@@ -248,8 +250,13 @@ pub enum Op {
 // A transaction τ — an atomic, ordered composition of primitive ops; the unit of undo.
 pub struct Txn { ops: vector<Op> }
 
+// Bundle ops into ONE transaction — the unit of undo.  Grouping them here is
+// what makes a compound edit undo in a single step rather than in pieces.
 pub fn txn_of(ops: vector<Op>) -> Txn { return Txn { ops: ops }; }
 
+// Apply one primitive op and answer the new document.  The dispatch every
+// higher-level edit funnels through, so `Ins` / `Del` / `Sty` have exactly one
+// meaning each.  An unrecognised op answers the document unchanged.
 pub fn apply_op(d: Doc, op: Op) -> Doc {
   if op is Ins { at, str, style } { return insert_text(d, at, str, style); }
   if op is Del { from, to } { return delete_range(d, from, to); }
@@ -327,6 +334,8 @@ pub fn invert(d: Doc, t: Txn) -> Txn {
 // surface restyles by swapping the resolver.
 pub struct Style { size: float, weight: integer, italic: boolean, dir: integer }
 
+// Size 1, regular, upright, left-to-right — the style a document starts in and
+// the one to adjust from rather than building a `Style` field by field.
 pub fn default_style() -> Style { return Style { size: 1.0, weight: 0, italic: false, dir: 0 }; }
 
 // The fake monospace Measurer μ: advance width = character-count × style.size. Pure and
@@ -1303,6 +1312,9 @@ pub fn materialise_viewport(d: Doc, pages: vector<Page>, page_h: float, y_top: f
 
 // -------------------- S5.4 incremental compaction (probe P3) --------------------
 
+// How many pieces the document is fragmented into.  Edits split pieces, so this
+// rises with editing and `compact_step` is what brings it back down — which makes it
+// the measure to watch when deciding whether compaction is worth running.
 pub fn piece_count(d: Doc) -> integer { return len(d.pieces); }
 
 // Coalesce up to `budget` adjacent piece pairs that reference a CONTIGUOUS buffer span with
