@@ -49,6 +49,9 @@ pub fn rand_indices(n: integer) -> vector<integer>;
 //   v = r.get(1, 6);          // a die roll from THIS stream
 //   p = r.indices(52);        // a shuffled deck from THIS stream
 
+// An independent random stream: the two Lehmer generator states.  Seed one with `seed_stream`
+// and draw from it with its methods, so its sequence does not depend on any other draw in the
+// program.
 pub struct RandStream {
   s1: integer,   // Lehmer state A in [1, 2147483562]
   s2: integer,   // Lehmer state B in [1, 2147483398]

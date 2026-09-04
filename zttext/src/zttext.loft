@@ -365,6 +365,8 @@ pub struct Rect { x: float, y: float, w: float, h: float }
 // `hyphen` marks a synthetic line-end hyphen glyph (from a discretionary break, S4.7):
 // it renders "-" rather than its κ text, and κ points at the soft-hyphen it stands in for.
 pub struct Box  { rect: Rect, ks: integer, ke: integer, style: integer, hyphen: boolean = false }
+// The boxes of a laid-out text: one `Box` per glyph run, in layout order.  What `flow_layout`
+// returns.
 pub struct BoxSet { boxes: vector<Box> }
 
 // A laid-out visual line: the logical char span [cs,ce) its boxes cover, its top y and its
