@@ -1,0 +1,154 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Records that encode to the same bytes every time — and the one thing that does not make unique.
+//
+// `cbor` is canonical CBOR (RFC 8949) in pure loft: build a `CborValue`, `encode` it to
+// bytes, `decode` bytes back. Canonical is the whole point — the same record always
+// produces the same bytes, on any target, however it was assembled — which is what makes a
+// signature over those bytes mean something.
+//
+// It is not a JSON codec and not a schema system: there is no mapping from your structs to
+// the wire and no validation beyond well-formedness. You build the value; the codec makes
+// its bytes deterministic. Pure loft with no native crate, so it behaves identically on
+// every target by construction.
+use cbor;
+
+fn hex(b: vector<u8>) -> text {
+  s = "";
+  for x in b { s += "{x:02x}"; }
+  s
+}
+
+fn main() {
+  rec = CMap { entries: [
+    CborEntry { key: CText { value: "id" },  value: CInt { value: 7 } },
+    CborEntry { key: CText { value: "ok" },  value: CBool { value: true } },
+  ] };
+  bytes = encode(rec);
+  back = decode(bytes);
+
+  println("bytes  : {hex(bytes)}");
+  println("ok     : {back.ok}");
+  println("consumed all: {back.next == len(bytes)}");
+
+  assert(back.ok, "a record this codec wrote is a record it reads");
+  assert(back.next == len(bytes), "…and `next` says it consumed every byte");
+
+  // Every section below is a function, and `main` calls each one. A section `main` does not
+  // call still COMPILES — so a renamed API is caught, and the assertions that check the
+  // example is RIGHT never run.
+  duplicate_keys_pass_silently();
+  the_order_you_built_in_does_not_reach_the_wire();
+  one_false_for_four_problems();
+  bytes_and_text_are_different_types();
+}
+
+// That prints:
+//
+//     bytes  : a262696407626f6bf5
+//     ok     : true
+//     consumed all: true
+//
+// ## The one that bites: canonical is about ORDER, not UNIQUENESS
+//
+// A map with two entries under the same key encodes without complaint and decodes
+// `ok = true`. Nothing here will tell you that a record carries two values for one field.
+//
+// And the duplicate survives a signature perfectly happily — the bytes are stable, so they
+// verify — which means a reader that takes the FIRST match and a reader that takes the LAST
+// disagree about a record both consider valid and both consider signed. That is the failure
+// this package's own guarantee cannot catch for you.
+//
+// **Uniqueness is yours to enforce, before encoding.**
+
+fn duplicate_keys_pass_silently() {
+  dup = CMap { entries: [
+    CborEntry { key: CText { value: "k" }, value: CInt { value: 1 } },
+    CborEntry { key: CText { value: "k" }, value: CInt { value: 2 } },
+  ] };
+  enc = encode(dup);
+
+  assert(hex(enc) == "a2616b01616b02", "both entries reach the wire: {hex(enc)}");
+  assert(decode(enc).ok, "…and the decoder accepts them without a word");
+
+  println("dup    : two values for one key, encoded and decoded, silently");
+}
+
+// ## The order you built the map in does not reach the wire
+//
+// `encode` sorts a map's entries by their encoded key bytes (RFC 8949 §4.2.1) before
+// emitting. So two maps built in different orders are byte-identical afterwards, and that
+// is the property everything else rests on: a signature over the bytes stays valid however
+// the record was assembled, on any target, in any release.
+//
+// It also means you cannot use entry order to carry meaning. If the order matters, it is an
+// array, not a map.
+
+fn the_order_you_built_in_does_not_reach_the_wire() {
+  ba = CMap { entries: [
+    CborEntry { key: CText { value: "b" }, value: CInt { value: 2 } },
+    CborEntry { key: CText { value: "a" }, value: CInt { value: 1 } },
+  ] };
+  ab = CMap { entries: [
+    CborEntry { key: CText { value: "a" }, value: CInt { value: 1 } },
+    CborEntry { key: CText { value: "b" }, value: CInt { value: 2 } },
+  ] };
+
+  assert(hex(encode(ba)) == hex(encode(ab)), "built two ways, one set of bytes");
+  assert(hex(encode(ba)) == "a2616101616202", "…sorted by key: {hex(encode(ba))}");
+
+  println("canon  : built b-then-a, encoded a-then-b — same bytes either way");
+}
+
+// ## One `ok = false` for four problems, and one of them will surprise you
+//
+// `decode` answers a `Decoded { value, next, ok }`. Check `ok` FIRST — on a failure `value`
+// means nothing.
+//
+// The surprise is that it **rejects well-formed CBOR that is not canonical**. A permissive
+// encoder elsewhere may write the integer `1` as the valid long form `18 01`; this decoder
+// refuses it, because accepting it would mean two byte strings decode to one value and the
+// signable-record property is gone. Truncated input, trailing bytes after the top-level
+// value, and empty input are the other three — and `ok = false` does not say which. A
+// failure here means *"these are not my bytes"*, never a diagnosis.
+
+fn one_false_for_four_problems() {
+  canonical: vector<u8> = [1];
+  assert(decode(canonical).ok, "the canonical spelling of 1 decodes");
+
+  long_form: vector<u8> = [24, 1];      // also a valid CBOR 1 — and refused here
+  assert(!decode(long_form).ok, "well-formed but NOT canonical: rejected");
+
+  empty: vector<u8> = [];
+  assert(!decode(empty).ok, "empty input is a failure, not an empty value");
+
+  println("decode : `ok` first — and non-canonical input is refused, by design");
+}
+
+// ## `CBytes` and `CText` are different wire types
+//
+// They carry the same payload and encode differently: a text string is major type 3, a byte
+// string major type 2. So the loft-side choice is a wire-format choice, and a peer decoding
+// your record sees which one you picked. Use `CText` for something that IS text and
+// `CBytes` for anything opaque — a key, a ciphertext, a nested encoded record.
+
+fn bytes_and_text_are_different_types() {
+  as_text = encode(CText { value: "hi" });
+  as_bytes = encode(CBytes { value: [104, 105] });
+
+  assert(hex(as_text) == "626869", "text: major type 3 — {hex(as_text)}");
+  assert(hex(as_bytes) == "426869", "bytes: major type 2 — {hex(as_bytes)}");
+  assert(hex(as_text) != hex(as_bytes), "same two payload bytes, different records");
+
+  println("types  : CText 62.., CBytes 42.. — the choice is on the wire");
+}
+
+// ## Where to go next
+//
+// - `README.md` — the full `CborValue` set (`CNull`, `CBool`, `CInt`, `CBytes`, `CText`,
+//   `CArray`, `CMap`) and what canonical encoding guarantees.
+// - `tests/worked-examples.loft` — `@CBR-001` … `@CBR-004`, the four contracts above as
+//   running tests.
+// - `crypto` for signing the bytes this produces, and `pluginabi` for a protocol built on
+//   both.
