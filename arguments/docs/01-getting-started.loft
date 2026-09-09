@@ -1,0 +1,167 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Declare your options, parse argv, ask for the answers — and print the help yourself.
+//
+// `arguments` is GNU-style command-line parsing: you declare what your program accepts,
+// hand it `argv`, and then ask. It understands `--name value`, `--name=value`, `-n value`,
+// glued `-nvalue`, bundled `-abc`, unambiguous prefix abbreviation (`--verb` for
+// `--verbose`), `--` to end option parsing, and options interspersed with positionals.
+//
+// It is not a subcommand framework — there is no `git commit`-shaped dispatch — and it does
+// not read the environment, a config file or a completion script. It parses one `argv` and
+// answers questions about it.
+//
+// Three steps, always in this order: **declare, parse, query.** Declaring after parsing is
+// not an error and simply comes too late.
+use arguments;
+
+fn main() {
+  a = arguments::create("greet", "1.2", "Greet somebody");
+  a.flag("v", "verbose", "Say more");
+  a.option("n", "name", "WHO", "Who to greet");
+
+  ok = a.parse(["--name", "Ada", "-v", "extra.txt"]);
+
+  println("parsed  : {ok}");
+  println("name    : {a.get(\"name\")}");
+  println("verbose : {a.has(\"verbose\")}");
+  println("left    : {a.positionals[0]}");
+
+  assert(ok, "the line parses");
+  assert(a.get("name") == "Ada", "a value option carries its value");
+  assert(a.has("verbose"), "a flag is present or it is not");
+  assert(a.positionals[0] == "extra.txt", "anything that is not an option is a positional");
+
+  // Every section below is a function, and `main` calls each one. A section `main` does not
+  // call still COMPILES — so a renamed API is caught, and the assertions that check the
+  // example is RIGHT never run.
+  help_is_yours_to_print();
+  the_four_kinds_of_option();
+  a_failed_parse_says_why();
+  what_the_syntax_accepts();
+}
+
+// That prints:
+//
+//     parsed  : true
+//     name    : Ada
+//     verbose : true
+//     left    : extra.txt
+//
+// ## The one that bites: `enable_help()` prints nothing
+//
+// `enable_help()` registers `--help` / `-h` and `--version` / `-V` so they parse instead of
+// being rejected as unknown. It does not print anything, and it does not exit. So a program
+// that calls it and stops there answers `--help` with silence, and reads as broken.
+//
+// After `parse`, ASK — `wants_help()` and `wants_version()` — and render `help()` or
+// `version_text()` yourself. That is deliberate: where the text goes, whether it pages, and
+// what exit code follows are the program's decisions, not the parser's.
+//
+// A `--help` line also short-circuits the required-option check, so `prog --help` works on a
+// program whose options are all mandatory — which is what a user asking for help needs.
+
+fn help_is_yours_to_print() {
+  a = arguments::create("greet", "1.2", "Greet somebody");
+  a.enable_help();
+  a.parse(["--help"]);
+
+  assert(a.wants_help(), "the flag parsed, and the ANSWER is a question you ask");
+  assert(a.help().contains("Usage: greet"), "help() is text — you decide where it goes");
+  assert(a.version_text() == "greet 1.2", "and so is the version line");
+
+  // The short-circuit: a required option is not missed when help was asked for.
+  b = arguments::create("greet", "1.2", "Greet somebody");
+  b.required("n", "name", "WHO", "Who to greet");
+  b.enable_help();
+  assert(b.parse(["--help"]), "--help parses even though --name is required");
+
+  println("help    : registered, never printed — you print it");
+}
+
+// ## The four kinds, and the one that surprises
+//
+//   - `flag(short, long, desc)` — present or absent, never takes a value
+//   - `option(short, long, ARG, desc)` — always takes a value
+//   - `required(short, long, ARG, desc)` — the same, and `parse` FAILS without it
+//   - `optional(short, long, ARG, desc)` — takes a value only when it is GLUED
+//
+// That last rule is the one to read twice. `--color=auto` and `-cauto` carry a value;
+// **bare `--color` is present with an EMPTY value and does not eat the next word**. It is
+// not an error either, so a program that expects `--color auto` to work gets an empty
+// colour and an unexpected positional, with nothing reported.
+
+fn the_four_kinds_of_option() {
+  a = arguments::create("ls", "1.0", "List files");
+  a.optional("c", "color", "WHEN", "Colorize the output");
+
+  assert(a.parse(["--color", "file.txt"]), "bare optional parses — it is not an error");
+  assert(a.has("color"), "…and is present");
+  assert(a.get("color") == "", "…with an empty value");
+  assert(a.positionals[0] == "file.txt", "…and the next word stays a positional");
+
+  b = arguments::create("ls", "1.0", "List files");
+  b.optional("c", "color", "WHEN", "Colorize the output");
+  assert(b.parse(["--color=always"]), "glued parses");
+  assert(b.get("color") == "always", "…and carries the value");
+
+  println("kinds   : optional takes a value only when GLUED");
+}
+
+// ## A failed parse says why, and `get` tells absent from empty
+//
+// `parse` answers a boolean. On false, `error_msg()` is the sentence to show — it names the
+// option and what was wrong with it. `ok()` is the same fact asked the other way.
+//
+// For reading values: `get` answers `text?`, so a missing option is `null` and an option
+// given an empty value is `""` — two different things the query keeps apart. `get_or` folds
+// them into one when you have a default, and `get_int` parses.
+
+fn a_failed_parse_says_why() {
+  a = arguments::create("greet", "1.2", "Greet somebody");
+  a.required("n", "name", "WHO", "Who to greet");
+
+  assert(!a.parse([]), "a missing required option fails the parse");
+  assert(!a.ok(), "…and ok() agrees");
+  assert(a.error_msg() == "option '--name' is required", "…with the sentence to show");
+
+  b = arguments::create("greet", "1.2", "Greet somebody");
+  b.option("n", "name", "WHO", "Who to greet");
+  assert(b.parse([]), "an ordinary option may be absent");
+  assert(b.get("name") == null, "absent is null…");
+  assert(b.get_or("name", "world") == "world", "…which is what get_or is for");
+
+  println("errors  : parse answers false, error_msg says which option");
+}
+
+// ## What the syntax accepts
+//
+// Prefix abbreviation resolves `--verb` to `--verbose` while it is unambiguous, and reports
+// an error when two declared options share the prefix. Everything after `--` is a
+// positional whatever it looks like, and a lone `-` is a positional too — the stdin
+// convention.
+
+fn what_the_syntax_accepts() {
+  a = arguments::create("greet", "1.2", "Greet somebody");
+  a.flag("v", "verbose", "Say more");
+  assert(a.parse(["--verb"]), "an unambiguous prefix parses");
+  assert(a.has("verbose"), "…as the option it abbreviates");
+
+  b = arguments::create("greet", "1.2", "Greet somebody");
+  b.flag("v", "verbose", "Say more");
+  assert(b.parse(["--", "--verbose"]), "-- ends option parsing");
+  assert(!b.has("verbose"), "…so this one is not the flag");
+  assert(b.positionals[0] == "--verbose", "…it is a positional that looks like a flag");
+
+  println("syntax  : --verb abbreviates, -- ends the options");
+}
+
+// ## Where to go next
+//
+// - `README.md` — the full syntax table (bundling, glued short values, GNU permutation) and
+//   the API list.
+// - `tests/02-worked-examples.loft` — `@ARG-001` … `@ARG-004`, the contracts above as
+//   running tests.
+// - `set_usage` / `set_epilog` / `set_bug_address` shape what `help()` renders, and
+//   `try_help()` is the one-line "try --help" pointer for an error path.
