@@ -1,0 +1,152 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Three verbs over a text — and the pattern that fails without saying so.
+//
+// `regex` gives a `text` three methods: `search` for where a pattern first matches,
+// `matches` for whether it matches at all, and `split_on` for the pieces between matches.
+// Patterns are written inline and cached, so calling the same one in a loop is cheap.
+//
+// It is deliberately the SMALL-SCRIPT tool — log scanning, CLI fields, quick extraction —
+// and not a parser. Grammars, ASTs and recursion are somebody else's job, and there is no
+// `replace` or capture-group accessor yet.
+//
+// ⚠ **The verbs are named around the stdlib, not after the usual regex words**, and that is
+// the first thing to know. `text` already has `find` (a LITERAL substring search) and
+// `split` (on a CHARACTER), and a method wins name resolution over an imported free
+// function — so a bare `find(pattern, line)` compiles, type-checks and answers the stdlib's
+// literal search instead of this one. Hence `search` and `split_on`. `matches` is
+// collision-free and keeps its bare name.
+use regex;
+
+fn main() {
+  line = "order 1234 shipped 2026-09-09";
+
+  at = line.search("[0-9]+");
+  println("first number at byte {at}");
+  println("has a 4-digit run : {line.matches(\"[0-9]{4}\")}");
+
+  assert(at == 6, "the first digit run starts at byte 6");
+  assert(line.matches("[0-9]{4}"), "1234 is four digits");
+  assert(!line.matches("[a-z]{20}"), "and nothing here is twenty letters");
+
+  // Every section below is a function, and `main` calls each one. A section `main` does not
+  // call still COMPILES — so a renamed API is caught, and the assertions that check the
+  // example is RIGHT never run.
+  a_pattern_that_never_compiled();
+  the_offset_is_a_byte();
+  splitting_yields_the_gaps();
+  the_older_spellings_still_work();
+}
+
+// That prints:
+//
+//     first number at byte 6
+//     has a 4-digit run : true
+//
+// ## The one that bites: an invalid pattern answers "no match"
+//
+// A pattern that does not compile is not reported. `search` answers null and `matches`
+// answers false — the same two answers a perfectly good pattern gives when the text simply
+// does not contain it. So a typo in a pattern reads as *this line has no numbers in it*,
+// and a scanner built on it quietly finds nothing, for every line, forever.
+//
+// There is no third answer to check for, so the defence is to test the pattern against text
+// you know it must match — once, near where the pattern is written — rather than to guard
+// each call.
+
+fn a_pattern_that_never_compiled() {
+  broken = "[unclosed";          // a character class with no `]`
+  assert("abc 123".search(broken) == null, "an invalid pattern answers null…");
+  assert(!"abc 123".matches(broken), "…and false");
+
+  // …which is exactly what a VALID pattern answers when it does not match.
+  assert("abc 123".search("[xyz]+") == null, "a good pattern that misses: also null");
+  assert(!"abc 123".matches("[xyz]+"), "also false");
+
+  // The check that works: assert the pattern against text it must match.
+  assert("abc 123".matches("[0-9]+"), "the pattern compiles and finds what it should");
+
+  println("invalid : answers null / false, exactly like a miss");
+}
+
+// ## The offset is a BYTE offset
+//
+// `search` answers where the match starts in BYTES, and `text` in loft is a UTF-8 buffer —
+// so on anything but ASCII the answer is not a character index. Slice with it and compare
+// it against `size()` (bytes); comparing it to `len()` (characters) reads correctly on
+// ASCII and silently wrongly on everything else.
+//
+// A miss is `null` even though the return type says `integer`, so test the result before
+// using it as a position.
+
+fn the_offset_is_a_byte() {
+  ascii = "order 1234";
+  assert(ascii.search("[0-9]+") == 6, "on ASCII, bytes and characters agree");
+
+  uni = "héllo 42";
+  assert(uni.search("[0-9]+") == 7, "é is two bytes, so the digits start at byte 7…");
+  assert(len(uni) == 8, "…where the CHARACTER index would be 6 of 8");
+  assert(size(uni) == 9, "and the buffer is 9 bytes");
+
+  assert(uni.search("[0-9]+") < size(uni), "compare an offset against size()");
+
+  println("offset  : byte 7 in a 9-byte, 8-character text");
+}
+
+// ## `split_on` yields the GAPS
+//
+// The pieces are what lies BETWEEN matches, which has two consequences worth seeing once: a
+// separator at either end leaves an empty piece, and two adjacent separators leave an empty
+// piece between them. Text with no match at all comes back as one piece — the whole text.
+//
+// It is lazy: the iterator yields through loft's coroutine channel, so nothing is
+// materialised and a `for` over a large text does not build a vector of it.
+
+fn splitting_yields_the_gaps() {
+  pieces: vector<text> = [];
+  for piece in "a,b;;c".split_on("[,;]") { pieces += [piece]; }
+  assert(len(pieces) == 4, "four gaps between three separators, got {len(pieces)}");
+  assert(pieces[1] == "b", "the middle piece");
+  assert(pieces[2] == "", "…and the empty one between the two adjacent separators");
+
+  whole: vector<text> = [];
+  for piece in "nothing here".split_on("[0-9]") { whole += [piece]; }
+  assert(len(whole) == 1 and whole[0] == "nothing here", "no match: one piece, the whole text");
+
+  println("split   : 'a,b;;c' on [,;] gives a, b, '' and c");
+}
+
+// ## The older spellings still work, and say so
+//
+// An earlier release shipped a pattern-first free function (`regex::find` / `regex::split`)
+// and a prefixed method (`line.regex_find` / `line.regex_split`). Both still work exactly as
+// they did — nothing was removed — and the compiler steers new calls to `search` /
+// `split_on` so the surface converges on one spelling per operation.
+//
+// ⚠ `regex::find` is reachable only when QUALIFIED. A bare `find(pattern, input)` resolves
+// the stdlib's `text` method first and answers a literal search — with the arguments in the
+// other order, which is why it type-checks.
+//
+// Running this section PRINTS two `advice[superseded-call]` lines, and that is the steering
+// channel working rather than a defect in the guide: the two calls below are deliberately
+// the old spellings, so the compiler names the new one. Your own code sees the same line
+// wherever you write them, which is how the surface converges without anything breaking.
+
+fn the_older_spellings_still_work() {
+  line = "order 1234";
+  assert(regex::find("[0-9]+", line) == 6, "the qualified free function still answers");
+  assert(line.regex_find("[0-9]+") == 6, "…and so does the prefixed method");
+  assert(line.search("[0-9]+") == 6, "all three are the same operation");
+
+  println("steering: find / regex_find still work, search is the one to write");
+}
+
+// ## Where to go next
+//
+// - `README.md` — the pattern syntax the Rust `regex` crate accepts, and the roadmap
+//   (`match_groups` and `replace` are the next increment).
+// - `tests/worked-examples.loft` — `@RGX-001` … `@RGX-004`, the four contracts a signature
+//   cannot state, each a running test rather than a snippet.
+// - The stdlib's own `find`, `split`, `contains` and `starts_with` for literal text work —
+//   they need no import and no pattern compilation.
