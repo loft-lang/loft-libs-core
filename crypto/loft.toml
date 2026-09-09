@@ -1,6 +1,6 @@
 [package]
 name = "crypto"
-version = "0.3.8"
+version = "0.3.9"
 loft = ">=0.8"
 api_compatible_with  = "0.3.2"   # oldest own release this is a drop-in for
 data_compatible_with = "0.3.2"   # oldest own release whose stored data this reads
