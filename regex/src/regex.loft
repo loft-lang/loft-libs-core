@@ -78,13 +78,13 @@ pub fn search(self: text, pattern: text) -> integer {
   match_start(pattern, self)
 }
 
-// True if `pattern` matches anywhere in the text.  `both` registers this as
+// True if `pattern` matches anywhere in the text.  `self` registers this as
 // BOTH a method (`line.matches(p)`) and a free function (`matches(line, p)`).
 // Collision-free on `text` (the stdlib has `contains`, not `matches`).
 // Example: @RGX-003 — a pattern that never compiled answers false, exactly like
 // text that simply did not match.
-pub fn matches(both: text, pattern: text) -> boolean {
-  is_match(pattern, both)
+pub fn matches(self: text, pattern: text) -> boolean {
+  is_match(pattern, self)
 }
 
 // Split the text on matches of `pattern`, yielding each piece lazily through
