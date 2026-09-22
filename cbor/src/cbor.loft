@@ -41,7 +41,10 @@ pub struct CborEntry {
 
 // Canonical head: the major type (0..7) plus the SHORTEST-form encoding of
 // `arg` (RFC 8949 §4.2.1).  Lengths and integer payloads share this routine.
-fn head(major: integer, arg: integer) -> vector<u8> {
+// `major` is one of the eight CBOR major types, and saying so in the type is what lets the
+// native build emit `major * 32 + …` as plain arithmetic: a value the compiler can bound
+// cannot overflow, so no check is owed (every caller passes a literal 0..7).
+fn head(major: integer limit(0, 7), arg: integer) -> vector<u8> {
   buf: vector<u8> = [];
   if arg < 24 {
     buf += [((major * 32 + arg) & 255) as u8];
