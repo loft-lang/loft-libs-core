@@ -20,3 +20,6 @@
 
 # per-package loft dependency lock (regenerated)
 */loft.lock
+
+# a library bench's build output (bench/bench.rs → bench/.build/stats_rs)
+*/bench/.build/

@@ -1,0 +1,172 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass for `random`: every public routine, timed on a fixed
+// workload, with a hash of what it produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     bench/.build/stats_rs [--n N]                     the pure-Rust twin (bench/bench.rs)
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, draws (or
+// elements) per op, ns per draw, and an FNV-1a-32 hash of one canonical op's output.  The
+// interpreter, the native build and the Rust twin must print the same hash for a row, or
+// one of them is not computing the routine it claims to.
+//
+// Two rows cross into the library's native crate (`rand`, `rand_indices`: a PCG64 behind
+// the crossing); two are pure loft (`get`, `indices`: the RandStream combined LCG).  Every
+// op seeds its own generator from `r & 1`, so each repetition differs in VALUE and never
+// in the amount of work, and the seeded sequence makes the output a fixed function of it.
+use random;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+/// Draws per op of the scalar rows; calls per op (of `SHUFFLE_N` elements) of the vector rows.
+const DRAWS = 1000000;
+const CALLS = 100;
+const SHUFFLE_N = 4096;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── rand: the minimum crossing — two integers in, one out ───────────
+
+/// One op: seed the shared generator, draw DRAWS values in [0, 999]; the sum and the last draw.
+fn op_rand(salt: integer) -> (integer, integer) {
+  rand_seed(1234 + salt);
+  or_sum = 0;
+  or_last = 0;
+  for _i in 0..DRAWS {
+    or_last = rand(0, 999) ?? 0;
+    or_sum += or_last;
+  }
+  (or_sum, or_last)
+}
+
+fn bench_rand(n: integer) -> Row {
+  br_t0 = ticks();
+  br_sink = 0;
+  for r in 0..n {
+    (br_s, br_l) = op_rand(r & 1);
+    br_sink += br_s + br_l;
+  }
+  br_us = ticks() - br_t0;
+  (br_one_s, br_one_l) = op_rand(0);
+  br_v: vector<integer> = [br_one_s, br_one_l];
+  Row { name: "rand", iters: n, us: br_us, px: DRAWS, hash: fnv(FNV_OFFSET, br_v), sink: br_sink }
+}
+
+// ── rand_indices: a crossing that builds and returns a store vector ──
+
+/// One op: seed, then CALLS shuffles of SHUFFLE_N; the hash of the last vector folded with
+/// one element read from each.
+fn op_rand_indices(salt: integer) -> integer {
+  rand_seed(5678 + salt);
+  ri_acc = 0;
+  ri_last: vector<integer> = [];
+  for c in 0..CALLS {
+    ri_last = rand_indices(SHUFFLE_N);
+    ri_acc += ri_last[c]?;
+  }
+  ri_acc_v: vector<integer> = [ri_acc];
+  fnv(fnv(FNV_OFFSET, ri_last), ri_acc_v)
+}
+
+fn bench_rand_indices(n: integer) -> Row {
+  bi_t0 = ticks();
+  bi_sink = 0;
+  for r in 0..n { bi_sink += op_rand_indices(r & 1); }
+  bi_us = ticks() - bi_t0;
+  Row { name: "rand_indices", iters: n, us: bi_us, px: CALLS * SHUFFLE_N,
+        hash: op_rand_indices(0), sink: bi_sink }
+}
+
+// ── get: the RandStream combined LCG, in loft ───────────────────────
+
+/// One op: an owned stream, DRAWS draws in [0, 999]; the sum and the stream's final state.
+fn op_get(salt: integer) -> integer {
+  og_s = seed_stream(42 + salt);
+  og_sum = 0;
+  for _i in 0..DRAWS { og_sum += og_s.get(0, 999) ?? 0; }
+  og_v: vector<integer> = [og_sum, og_s.s1, og_s.s2];
+  fnv(FNV_OFFSET, og_v)
+}
+
+fn bench_get(n: integer) -> Row {
+  bg_t0 = ticks();
+  bg_sink = 0;
+  for r in 0..n { bg_sink += op_get(r & 1); }
+  bg_us = ticks() - bg_t0;
+  Row { name: "get", iters: n, us: bg_us, px: DRAWS, hash: op_get(0), sink: bg_sink }
+}
+
+// ── indices: Fisher-Yates over a RandStream, in loft ────────────────
+
+/// One op: an owned stream, CALLS shuffles of SHUFFLE_N; hashed like `rand_indices`.
+fn op_indices(salt: integer) -> integer {
+  ox_s = seed_stream(99 + salt);
+  ox_acc = 0;
+  ox_last: vector<integer> = [];
+  for c in 0..CALLS {
+    ox_last = ox_s.indices(SHUFFLE_N);
+    ox_acc += ox_last[c]?;
+  }
+  ox_acc_v: vector<integer> = [ox_acc];
+  fnv(fnv(FNV_OFFSET, ox_last), ox_acc_v)
+}
+
+fn bench_indices(n: integer) -> Row {
+  bx_t0 = ticks();
+  bx_sink = 0;
+  for r in 0..n { bx_sink += op_indices(r & 1); }
+  bx_us = ticks() - bx_t0;
+  Row { name: "indices", iters: n, us: bx_us, px: CALLS * SHUFFLE_N,
+        hash: op_indices(0), sink: bx_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  print_row(bench_rand(mn_n));
+  print_row(bench_rand_indices(mn_n));
+  print_row(bench_get(mn_n));
+  print_row(bench_indices(mn_n));
+}
