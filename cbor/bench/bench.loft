@@ -1,0 +1,241 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's encode and decode doors, timed on a fixed
+// workload, with a hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes, ns per item, and an FNV-1a-32 hash of one canonical op's output.  The hash is
+// what makes a benchmark a VALIDATION: the interpreter, the native build and the pure-Rust
+// twin in bench/bench.rs must print the same hash for a row, or one of them is not computing
+// the routine it claims to — and only then does comparing their speeds mean anything.
+//
+// Every op builds its own input from the repetition number `r`, and `r & 1` moves a value —
+// never the amount of work — so no backend can hoist an op out of the repetition loop.
+// Each op's result is folded into `sink`, printed on the last line.
+use cbor;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const ENC_REPS = 1000;
+const TEXTS = 64;
+const TEXT_BYTES = 256;
+const BYTES_REPS = 100;
+const DEC_MAP_REPS = 400;
+const ARR_INTS = 4096;
+const DEC_ARR_REPS = 40;
+
+/// FNV-1a-32 of one byte.
+fn fnv_byte(h: integer, b: integer) -> integer {
+  ((h ^ (b & 255)) * FNV_PRIME) & 0xFFFFFFFF
+}
+
+/// FNV-1a-32 over the 64 bits of an integer, high byte first.
+fn fnv_int(h0: integer, x: integer) -> integer {
+  fi_h = h0;
+  for fi_s in 0..8 { fi_h = fnv_byte(fi_h, x >> (56 - fi_s * 8)); }
+  fi_h
+}
+
+fn fnv_bytes(h0: integer, v: const vector<u8>) -> integer {
+  fb_h = h0;
+  for b in v { fb_h = fnv_byte(fb_h, b as integer); }
+  fb_h
+}
+
+/// A structural hash of a decoded value: a tag byte, then the payload, recursively.
+fn fnv_value(h0: integer, v: const CborValue) -> integer {
+  fv_h = h0;
+  match v {
+    CNull => { fv_h = fnv_byte(fv_h, 0); },
+    CBool { value } => { fv_h = fnv_byte(fnv_byte(fv_h, 1), if value { 1 } else { 0 }); },
+    CInt { value } => { fv_h = fnv_int(fnv_byte(fv_h, 2), value); },
+    CBytes { value } => { fv_h = fnv_bytes(fnv_int(fnv_byte(fv_h, 3), len(value)), value); },
+    CText { value } => {
+      fv_h = fnv_int(fnv_byte(fv_h, 4), size(value));
+      for fv_i in 0..size(value) { fv_h = fnv_byte(fv_h, value.byte_at(fv_i)); }
+    },
+    CArray { items } => {
+      fv_h = fnv_int(fnv_byte(fv_h, 5), len(items));
+      for it in items { fv_h = fnv_value(fv_h, it); }
+    },
+    CMap { entries } => {
+      fv_h = fnv_int(fnv_byte(fv_h, 6), len(entries));
+      for en in entries { fv_h = fnv_value(fnv_value(fv_h, en.key), en.value); }
+    },
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+fn tkey(k: text) -> CborValue { CText { value: k } }
+
+fn entry(k: text, v: CborValue) -> CborEntry { CborEntry { key: CText { value: k }, value: v } }
+
+/// The workload: a 12-entry map, built in NON-canonical key order, with every head width
+/// (1, 2, 3, 5, 9 bytes), every major type, and a nested 8-entry map.
+fn make_map(r: integer) -> CborValue {
+  mm_s = r & 1;
+  mm_nested: vector<CborEntry> = [];
+  for mm_i in 0..8 {
+    mm_k = 7 - mm_i;
+    mm_nested += [entry("n{mm_k}", CInt { value: mm_k * 1000 + mm_s })];
+  }
+  mm_payload: vector<u8> = [];
+  for mm_j in 0..16 { mm_payload += [((mm_j * 29 + mm_s) & 255) as u8]; }
+  CMap { entries: [
+    entry("zeta", CInt { value: 1000000 + mm_s }),
+    entry("id", CInt { value: 42 + mm_s }),
+    entry("alpha", CText { value: "hello world {mm_s}" }),
+    entry("name", CText { value: "cbor-bench" }),
+    entry("b", CBool { value: mm_s == 0 }),
+    entry("count", CInt { value: 300 + mm_s }),
+    entry("tags", CArray { items: [tkey("a"), tkey("bb"), CInt { value: 7 + mm_s }] }),
+    entry("payload", CBytes { value: mm_payload }),
+    entry("big", CInt { value: 5000000000 + mm_s }),
+    entry("none", CNull),
+    entry("neg", CInt { value: -5000 - mm_s }),
+    entry("nested", CMap { entries: mm_nested }),
+  ] }
+}
+
+// ── encode: a map's canonical key order, heads and payloads ─────────
+
+fn encode_op(r: integer) -> integer {
+  eo_m = make_map(r);
+  eo_sink = 0;
+  for eo_k in 0..ENC_REPS {
+    eo_out = encode(eo_m);
+    eo_sink += len(eo_out) + (eo_out[eo_k & 31]? as integer);
+  }
+  eo_sink
+}
+
+fn bench_encode(n: integer) -> Row {
+  be_t0 = ticks();
+  be_sink = 0;
+  for r in 0..n { be_sink += encode_op(r); }
+  be_us = ticks() - be_t0;
+  Row { name: "encode", iters: n, us: be_us, px: ENC_REPS,
+        hash: fnv_bytes(FNV_OFFSET, encode(make_map(0))), sink: be_sink }
+}
+
+// ── encode_bytes: text payloads, copied byte by byte ────────────────
+
+fn make_texts(r: integer) -> CborValue {
+  mt_items: vector<CborValue> = [];
+  for mt_i in 0..TEXTS {
+    mt_b: vector<u8> = [];
+    for mt_j in 0..TEXT_BYTES { mt_b += [((97 + (mt_i * 7 + mt_j + (r & 1)) % 26) & 255) as u8]; }
+    mt_items += [CText { value: text_from_bytes(mt_b) }];
+  }
+  CArray { items: mt_items }
+}
+
+fn bytes_op(r: integer) -> integer {
+  bo_v = make_texts(r);
+  bo_sink = 0;
+  for bo_k in 0..BYTES_REPS {
+    bo_out = encode(bo_v);
+    bo_sink += len(bo_out) + (bo_out[bo_k & 1023]? as integer);
+  }
+  bo_sink
+}
+
+fn bench_bytes(n: integer) -> Row {
+  bb_t0 = ticks();
+  bb_sink = 0;
+  for r in 0..n { bb_sink += bytes_op(r); }
+  bb_us = ticks() - bb_t0;
+  Row { name: "encode_bytes", iters: n, us: bb_us, px: BYTES_REPS * TEXTS * TEXT_BYTES,
+        hash: fnv_bytes(FNV_OFFSET, encode(make_texts(0))), sink: bb_sink }
+}
+
+// ── decode: recursive descent, one record per node ──────────────────
+
+fn make_ints(r: integer) -> CborValue {
+  mi_items: vector<CborValue> = [];
+  for mi_i in 0..ARR_INTS {
+    mi_v = (mi_i * 7919 + (r & 1)) % 70000;
+    if (mi_i & 1) == 1 { mi_v = -1 - mi_v; }
+    mi_items += [CInt { value: mi_v }];
+  }
+  CArray { items: mi_items }
+}
+
+fn decode_op(r: integer) -> integer {
+  do_map = encode(make_map(r));
+  do_arr = encode(make_ints(r));
+  do_sink = 0;
+  for _ in 0..DEC_MAP_REPS {
+    do_d = decode(do_map);
+    do_sink += do_d.next;
+  }
+  for _ in 0..DEC_ARR_REPS {
+    do_d2 = decode(do_arr);
+    do_sink += do_d2.next;
+  }
+  do_sink
+}
+
+fn decode_hash() -> integer {
+  dh_a = decode(encode(make_map(0)));
+  dh_b = decode(encode(make_ints(0)));
+  dh_h = fnv_value(FNV_OFFSET, dh_a.value);
+  dh_h = fnv_int(fnv_byte(dh_h, if dh_a.ok { 1 } else { 0 }), dh_a.next);
+  dh_h = fnv_value(dh_h, dh_b.value);
+  fnv_int(fnv_byte(dh_h, if dh_b.ok { 1 } else { 0 }), dh_b.next)
+}
+
+fn bench_decode(n: integer) -> Row {
+  bd_t0 = ticks();
+  bd_sink = 0;
+  for r in 0..n { bd_sink += decode_op(r); }
+  bd_us = ticks() - bd_t0;
+  Row { name: "decode", iters: n, us: bd_us, px: DEC_MAP_REPS * 44 + DEC_ARR_REPS * (ARR_INTS + 1),
+        hash: decode_hash(), sink: bd_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_encode(mn_n), bench_bytes(mn_n), bench_decode(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

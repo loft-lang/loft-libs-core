@@ -1,0 +1,210 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's native doors, timed on a fixed workload, with
+// a hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes, ns per item, and an FNV-1a-32 hash of one canonical op's output.  The hash is
+// what makes a benchmark a VALIDATION: the interpreter, the native build and the pure-Rust
+// twin in bench/bench.rs must print the same hash for a row, or one of them is not computing
+// the routine it claims to — and only then does comparing their speeds mean anything.
+//
+// Every routine here is a native crossing: the work happens in the package's Rust crate, so
+// a row measures what the boundary costs around it — a text in and a text out for `sha256`
+// (amortised over a 64-byte and a 1 MiB input), and a store-owned `vector<u8>` allocated per
+// call for `base64_to_bytes`.  The repetition number `r` moves which input an op starts
+// from — never the amount of work — so no backend can hoist an op out of the repetition
+// loop.  Each op's result is folded into `sink`, printed on the last line.
+//
+// Not benched: `ed25519_sign` and `hpke_seal_base_deterministic` — their twins would need
+// real elliptic-curve and AEAD crates, which a std-only single-file twin cannot carry.
+use crypto;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const SMALL_MSGS = 64;
+const SMALL_CALLS = 50000;
+const BIG_BYTES = 1048576;
+const B64_INPUTS = 16;
+const B64_PAYLOAD = 4096;
+const DECODES = 1000;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+/// FNV-1a-32 over each byte of a text.
+fn fnv_text(h0: integer, t: text) -> integer {
+  ft_h = h0;
+  for k in 0..size(t) { ft_h = ((ft_h ^ t.byte_at(k)) * FNV_PRIME) & 0xFFFFFFFF; }
+  ft_h
+}
+
+/// FNV-1a-32 over each byte of a byte vector.
+fn fnv_bytes(h0: integer, v: const vector<u8>) -> integer {
+  fb_h = h0;
+  for b in v { fb_h = ((fb_h ^ (b as integer)) * FNV_PRIME) & 0xFFFFFFFF; }
+  fb_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── sha256 on 64 bytes: the boundary around a two-block digest ──────
+
+/// Sixty-four distinct 64-byte lower-case ASCII messages.
+fn small_msgs() -> vector<text> {
+  sm_out: vector<text> = [];
+  for j in 0..SMALL_MSGS {
+    sm_m = "";
+    for k in 0..64 { sm_m += (97 + (j * 7 + k * 13) % 26) as character; }
+    sm_out += [sm_m];
+  }
+  sm_out
+}
+
+/// One op: SMALL_CALLS digests, each call on the next message, starting at `r`; one hex
+/// byte of each digest is folded in.
+fn small_op(msgs: const vector<text>, r: integer) -> integer {
+  so_acc = 0;
+  for i in 0..SMALL_CALLS {
+    so_d = crypto::sha256(msgs[(i + r) & 63]?);
+    so_acc += so_d.byte_at(i & 63);
+  }
+  so_acc
+}
+
+fn bench_sha256_small(n: integer) -> Row {
+  bs_msgs = small_msgs();
+  bs_t0 = ticks();
+  bs_sink = 0;
+  for r in 0..n { bs_sink += small_op(bs_msgs, r); }
+  bs_us = ticks() - bs_t0;
+  bs_h = FNV_OFFSET;
+  for m in bs_msgs { bs_h = fnv_text(bs_h, crypto::sha256(m)); }
+  bs_one: vector<integer> = [small_op(bs_msgs, 0)];
+  Row { name: "sha256_small", iters: n, us: bs_us, px: SMALL_CALLS, hash: fnv(bs_h, bs_one),
+        sink: bs_sink }
+}
+
+// ── sha256 on 1 MiB: the boundary amortised over a long digest ──────
+
+/// A 1 MiB printable-ASCII text: a 1 KiB block keyed by `salt`, doubled ten times.
+fn big_text(salt: integer) -> text {
+  bt_t = "";
+  for k in 0..1024 { bt_t += (32 + (k * 37 + salt * 11) % 95) as character; }
+  // Doubled through a copy: `bt_t += bt_t` on a returned text local does not compile on
+  // --native (the self-append form behind `OpAppendStackText`).
+  for _ in 0..10 {
+    bt_u = bt_t;
+    bt_t += bt_u;
+  }
+  bt_t
+}
+
+fn bench_sha256_1m(n: integer) -> Row {
+  bm_in: vector<text> = [big_text(0), big_text(1)];
+  bm_t0 = ticks();
+  bm_sink = 0;
+  for r in 0..n {
+    bm_d = crypto::sha256(bm_in[r & 1]?);
+    bm_sink += bm_d.byte_at(r & 63);
+  }
+  bm_us = ticks() - bm_t0;
+  bm_h = fnv_text(FNV_OFFSET, crypto::sha256(bm_in[0]?));
+  bm_h = fnv_text(bm_h, crypto::sha256(bm_in[1]?));
+  bm_len: vector<integer> = [size(bm_in[0]?)];
+  Row { name: "sha256_1m", iters: n, us: bm_us, px: BIG_BYTES, hash: fnv(bm_h, bm_len),
+        sink: bm_sink }
+}
+
+// ── base64_to_bytes: a crossing that allocates a store-owned vector ──
+
+/// Sixteen distinct 4 KiB payloads over every byte value, as standard base64 (4096 is not a
+/// multiple of 3, so each ends in `==`).
+fn b64_inputs() -> vector<text> {
+  bi_out: vector<text> = [];
+  for j in 0..B64_INPUTS {
+    bi_p: vector<u8> = [];
+    for k in 0..B64_PAYLOAD { bi_p += [((k * 31 + j * 17 + (k >> 8) * 5) & 255) as u8]; }
+    bi_out += [crypto::bytes_to_base64(bi_p)];
+  }
+  bi_out
+}
+
+/// One op: DECODES decodes, each on the next input, starting at `r`; the length and one
+/// byte of each result are folded in.
+fn b64_op(ins: const vector<text>, r: integer) -> integer {
+  bo_acc = 0;
+  for i in 0..DECODES {
+    bo_v = crypto::base64_to_bytes(ins[(i + r) & 15]?);
+    bo_acc += len(bo_v) + (bo_v[(i * 7) & 4095]? as integer);
+  }
+  bo_acc
+}
+
+fn bench_base64_to_bytes(n: integer) -> Row {
+  bb_ins = b64_inputs();
+  bb_t0 = ticks();
+  bb_sink = 0;
+  for r in 0..n { bb_sink += b64_op(bb_ins, r); }
+  bb_us = ticks() - bb_t0;
+  bb_h = FNV_OFFSET;
+  for s in bb_ins { bb_h = fnv_bytes(bb_h, crypto::base64_to_bytes(s)); }
+  bb_one: vector<integer> = [b64_op(bb_ins, 0)];
+  Row { name: "base64_to_bytes", iters: n, us: bb_us, px: DECODES, hash: fnv(bb_h, bb_one),
+        sink: bb_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_sha256_small(mn_n), bench_sha256_1m(mn_n),
+                          bench_base64_to_bytes(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}
