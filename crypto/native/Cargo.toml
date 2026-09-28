@@ -43,9 +43,3 @@ p256 = { version = "0.13", default-features = false, features = ["ecdsa", "arith
 
 [build-dependencies]
 loft-ffi-build = "0.2"
-
-# loft-ffi 0.1.2 is not on crates.io yet: build against the in-tree crate (the loft
-# checkout beside this repo).  DROP THIS BLOCK when the publish lands — a published
-# library must resolve its dependencies from the registry alone.
-[patch.crates-io]
-loft-ffi = { path = "../../../loft/loft-ffi" }

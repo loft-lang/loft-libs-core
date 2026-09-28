@@ -337,6 +337,8 @@ dependencies = [
 [[package]]
 name = "loft-ffi"
 version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1af0dbb791025e8a29b0154ddfdb629175e14e754afb0dad67e75b14c366df97"
 
 [[package]]
 name = "loft-ffi-build"
