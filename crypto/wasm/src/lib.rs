@@ -131,15 +131,14 @@ pub fn crypto_bytes_to_base64(stores: &mut Stores, bytes: &DbRef) -> String {
 }
 
 /// `crypto::base64_to_bytes(b64: text) -> vector<u8>` — `vector<u8>` from standard
-/// base64 `text`.  A malformed / empty string yields an empty vector.  Allocates
-/// the result vector exactly as `Stores::fs_read_bytes` does (stride 1).
+/// base64 `text`.  A malformed / empty string yields an empty vector.  The decoded
+/// buffer is served as it is, through a read-only foreign store (`Stores::foreign_vector`,
+/// the same answer the native bridge gives with `foreign_vector_from_owned`), so the
+/// four targets agree: the bytes read in place, and a write into them is refused.
 pub fn crypto_base64_to_bytes(stores: &mut Stores, b64: &str) -> DbRef {
     let data = base64::decode(b64);
-    let vec = stores.database(4);
     let count = data.len() as u32;
-    let rec = loft::vector::alloc_vector_from_bytes(stores.store_mut(&vec), 1, count, &data);
-    stores.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, rec);
-    vec
+    stores.foreign_vector(data.as_ptr(), count, 1, loft::store::ForeignOwner::Bytes(data))
 }
 
 /// `crypto::bytes_concat_b64(a_b64, b_b64: text) -> text` — base64 of

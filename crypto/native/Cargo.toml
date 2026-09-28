@@ -8,7 +8,9 @@ license = "LGPL-3.0-or-later"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-loft-ffi = "0.1"
+# 0.1.2: `LoftStore::foreign_vector_from_owned` — `base64_to_bytes` answers its buffer
+# with no copy.
+loft-ffi = "0.1.2"
 loft-ffi-macros = "0.1"
 
 # Asymmetric / KDF / AEAD primitives — the vetted pure-Rust RustCrypto + dalek
@@ -41,3 +43,9 @@ p256 = { version = "0.13", default-features = false, features = ["ecdsa", "arith
 
 [build-dependencies]
 loft-ffi-build = "0.2"
+
+# loft-ffi 0.1.2 is not on crates.io yet: build against the in-tree crate (the loft
+# checkout beside this repo).  DROP THIS BLOCK when the publish lands — a published
+# library must resolve its dependencies from the registry alone.
+[patch.crates-io]
+loft-ffi = { path = "../../../loft/loft-ffi" }

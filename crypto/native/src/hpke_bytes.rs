@@ -47,12 +47,16 @@ pub unsafe fn encode(store: &LoftStore, vec: &LoftRef) -> String {
 
 /// standard base64 `text` -> `vector<u8>`.
 ///
-/// Allocates the result vector directly in the loft store (element stride 1).
-/// A malformed or empty base64 string yields an empty vector — never a panic.
+/// Hands loft the decoded buffer itself — no copy into the store: loft serves it
+/// read-only and releases it (here, in this crate's allocator) with the last handle
+/// over it.  Reads answer what a copied vector answers; a write into the result halts
+/// the program with the advice to copy first, which is the contract `base64_to_bytes`
+/// already stated.  A malformed or empty base64 string yields an empty vector — never
+/// a panic.
 #[must_use]
 pub unsafe fn decode(store: &mut LoftStore, b64: &str) -> LoftRef {
     let bytes = crate::base64::decode(b64);
-    unsafe { store.alloc_vector_from_bytes(1, bytes.len() as u32, bytes.as_ptr(), bytes.len()) }
+    unsafe { store.foreign_vector_from_owned(bytes) }
 }
 
 /// Concatenate the raw bytes behind two base64 strings: `base64(bytes(a) || bytes(b))`.

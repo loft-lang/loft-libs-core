@@ -226,13 +226,13 @@ pub fn hkdf_expand(prk_b64: text, info_b64: text, length: integer) -> text {
 // `text` (`text_from_bytes` returns "").  These two inverse helpers move raw
 // bytes across the base64 boundary instead.
 //
-// CAUTION — a `vector<u8>` returned by `base64_to_bytes` is sound to READ
-// (index, iterate, pass by value, or concatenate INTO a fresh loft vector with
-// `fresh += decoded`), but do NOT use it as the left-hand accumulator of `+=`
-// (`decoded += more`): in-place growth of a store-allocated byte vector after a
-// later store allocation currently corrupts it (a loft FFI-vector bug).  To
-// concatenate base64 byte strings, prefer composing in base64 throughout (see
-// how the HPKE code below uses `bytes_concat_b64_native`).
+// A `vector<u8>` returned by `base64_to_bytes` is the decoder's own buffer, served
+// with no copy and READ-ONLY: index it, iterate it, slice it, pass it on, or
+// concatenate it INTO a fresh loft vector (`fresh += decoded`).  A write into it
+// (`decoded[0] = x`, `decoded += more`) stops the program with the advice to copy
+// first — `w = decoded` copies, and the copy is an ordinary vector.  To concatenate
+// base64 byte strings, compose in base64 throughout (see how the HPKE code below uses
+// `bytes_concat_b64_native`).
 
 // Standard base64 of a raw byte vector.  Empty vector -> "".
 pub fn bytes_to_base64(bytes: vector<u8>) -> text {
@@ -240,7 +240,7 @@ pub fn bytes_to_base64(bytes: vector<u8>) -> text {
 }
 
 // Raw bytes from standard base64.  Malformed / empty input -> empty vector.
-// See the CAUTION above: read the result, never `+=` onto it.
+// See the note above: the result is read-only; bind a copy before writing.
 // Example: @CRY-001 — reading a decoded byte vector, and hashing non-UTF-8 bytes.
 pub fn base64_to_bytes(b64: text) -> vector<u8> {
   base64_to_bytes_native(b64)
