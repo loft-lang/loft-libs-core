@@ -241,17 +241,16 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
   // --- dispatch on major type ---
   if major == 0 { return Decoded { value: CInt { value: arg }, next: argpos, ok: true }; }
   if major == 1 { return Decoded { value: CInt { value: 0 - arg - 1 }, next: argpos, ok: true }; }
+  // The payload arms take their span of the frame in ONE block (`bytes[argpos..argpos + arg]`,
+  // a slice at a field and at an argument position): no per-byte loop, no buffer of their own.
+  // On a frame the host hands over as read-only bytes the span is read in place.
   if major == 2 {
     if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
-    bs: vector<u8> = [];
-    for k in 0..arg { bs += [bytes[argpos + k] ?? 0]; }
-    return Decoded { value: CBytes { value: bs }, next: argpos + arg, ok: true };
+    return Decoded { value: CBytes { value: bytes[argpos..argpos + arg] }, next: argpos + arg, ok: true };
   }
   if major == 3 {
     if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
-    tb: vector<u8> = [];
-    for k in 0..arg { tb += [bytes[argpos + k] ?? 0]; }
-    return Decoded { value: CText { value: text_from_bytes(tb) }, next: argpos + arg, ok: true };
+    return Decoded { value: CText { value: text_from_bytes(bytes[argpos..argpos + arg]) }, next: argpos + arg, ok: true };
   }
   if major == 4 {
     items: vector<CborValue> = [];

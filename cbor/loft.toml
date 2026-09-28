@@ -2,7 +2,7 @@
 name = "cbor"
 version = "0.1.7"
 description = "Signable canonical CBOR (RFC 8949), pure loft — canonical map-key ordering, full decode, byte-identical encode->decode->encode, native == wasm."
-loft = ">=0.8"
+loft = ">=2026.10.0"   # a slice at a field and an argument position (v2026.9.0 refused it there)
 api_compatible_with  = "0.1.1"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.1"   # oldest own release whose stored data this reads
 repository = "loft-libs-core"
