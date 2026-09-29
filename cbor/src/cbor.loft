@@ -257,7 +257,7 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
     items: vector<CborValue> = [];
     p = argpos;
     aok = true;
-    for k in 0..arg {
+    for _ in 0..arg {
       if aok {
         sub = read_value(bytes, p);
         if sub.ok { items += [sub.value]; p = sub.next; } else { aok = false; }
@@ -270,7 +270,7 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
     entries: vector<CborEntry> = [];
     p = argpos;
     mok = true;
-    for k in 0..arg {
+    for _ in 0..arg {
       if mok {
         kd = read_value(bytes, p);
         if kd.ok {

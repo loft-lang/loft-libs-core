@@ -17,7 +17,7 @@
 // function — so a bare `find(pattern, line)` compiles, type-checks and answers the stdlib's
 // literal search instead of this one. Hence `search` and `split_on`. `matches` is
 // collision-free and keeps its bare name.
-use regex;
+use regex::*;
 
 fn main() {
   line = "order 1234 shipped 2026-09-09";

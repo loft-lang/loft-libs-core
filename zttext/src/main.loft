@@ -11,7 +11,7 @@
 // browser. Real glyph metrics (lib/ztfont) are a separately-proven, byte-identical Measurer, so a
 // real viewer composes the two; this harness pins the engine half. Run: `loft src/main.loft` with
 // any trigger on stdin.
-use zttext;
+use zttext::*;
 
 fn main() {
   _ = host_input();   // a trigger; the scenario is fixed, so the emission is deterministic

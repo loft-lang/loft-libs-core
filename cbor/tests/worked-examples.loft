@@ -12,7 +12,7 @@
 // same bytes, because a signature is over the BYTES.  So the contracts that matter
 // are all about which loft-side choices reach the wire and which do not — and the
 // answers are not the obvious ones in either direction.
-use cbor;
+use cbor::*;
 
 // Render bytes as hex so an expected encoding can be written out in full rather
 // than asserted one index at a time.

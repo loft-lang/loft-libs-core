@@ -10,7 +10,7 @@
 //   AES-256-GCM  — Project Wycheproof aes_gcm_test.json tcId 91 (keySize 256,
 //                  ivSize 96, tagSize 128, result "valid").
 
-use crypto;
+use crypto::*;
 
 // ── X25519 ECDH — RFC 7748 §6.1 ──────────────────────────────────────
 //

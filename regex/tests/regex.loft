@@ -11,7 +11,7 @@
 // `loft` floor stays where it is.
 // @EXPECT_WARNING: `find` is also a method on `text`
 // @EXPECT_WARNING: `split` is also a method on `text`
-use regex;
+use regex::*;
 
 fn main() {
   // --- matches: text method (subject.matches(pattern)) ---

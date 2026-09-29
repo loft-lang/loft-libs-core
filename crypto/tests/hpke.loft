@@ -27,7 +27,7 @@
 //   pt     = 4265617574792069732074727574682c20747275746820626561757479
 //   ct     = e5d84cd531cfb583096e7cfa9641bd3079cf3a91cda813c52deb5f512be9931980a41de125a925cdad859d5b7a
 
-use crypto;
+use crypto::*;
 
 const SK_E   = "F51LU7Y2XEW2AMQWO2HZXLwvTZ428WlVWNziZauLqxE=";
 const SK_R   = "SXtFAmZM/qXVrws5k02sciQqdPhIBFHhrufWpTMgMz0=";

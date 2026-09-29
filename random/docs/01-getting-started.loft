@@ -22,7 +22,7 @@
 // ## The smallest thing that does something
 //
 // Seed the shared generator, then roll a die:
-use random;
+use random::*;
 
 fn main() {
   rand_seed(42);

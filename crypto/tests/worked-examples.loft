@@ -19,7 +19,7 @@
 // function result handed straight through as a TEMPORARY hits a native store-lifetime
 // bug (the argument's pointer arrives null while its length survives).  That is the
 // convention in ed25519.loft and es256.loft too.
-use crypto;
+use crypto::*;
 
 // @CRY-001 — two hashing doors, and why there are two.  `sha256` takes loft `text` and
 // answers a 64-character lowercase HEX digest; `sha256_b64` takes the BASE64 of a raw

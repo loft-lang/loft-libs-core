@@ -1,7 +1,7 @@
 // Tests for zttext — the text engine. Run: `loft test` (interpret) and `loft test --native`.
 // Each test asserts a concrete invariant from doc/ZTTEXT_NOTATION.md (I1–I9); the parity
 // gate (interpret == native == native-wasm) is the definition of done per step.
-use zttext;
+use zttext::*;
 
 // ============================ reference model (test-only) ============================
 // A deliberately naive, obviously-correct model — a flat vector<character> for the text

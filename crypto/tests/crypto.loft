@@ -12,7 +12,7 @@
 // substitution via a UTF-8 input that produces a `/` in standard
 // base64.
 
-use crypto;
+use crypto::*;
 
 // Helper: build a string of N copies of a single character.
 fn repeat(c: text, n: integer) -> text {

@@ -1,6 +1,6 @@
 // ABI-width cells — negative and beyond-i32 values must cross the
 // native boundary intact (the old i32 extern truncated them silently).
-use random;
+use random::*;
 
 fn main() {
   random::rand_seed(7);

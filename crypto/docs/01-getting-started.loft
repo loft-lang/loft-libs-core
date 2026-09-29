@@ -14,7 +14,7 @@
 // Keys, messages, nonces, ciphertexts, digests from the `_b64` doors — all of them. The
 // signatures say `text -> text` and cannot tell you that, which is why the section below
 // exists and why it is the first one.
-use crypto;
+use crypto::*;
 
 fn main() {
   // Hashing plain text, and the bridge every other call needs.
