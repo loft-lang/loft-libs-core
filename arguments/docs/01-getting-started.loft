@@ -14,7 +14,7 @@
 //
 // Three steps, always in this order: **declare, parse, query.** Declaring after parsing is
 // not an error and simply comes too late.
-use arguments;
+use arguments::*;
 
 fn main() {
   a = arguments::create("greet", "1.2", "Greet somebody");

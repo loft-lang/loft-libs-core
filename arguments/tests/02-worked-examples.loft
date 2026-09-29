@@ -6,7 +6,7 @@
 // `// Example: @ARG-00N`, and `check_doc_drift.sh examples` fails if a citation goes
 // dangling (no test carries the tag).  These are teaching examples, distinct from the
 // exhaustive assertion suite in 01-arguments.loft.
-use arguments;
+use arguments::*;
 
 // @ARG-001 — the declare → parse → query lifecycle.  Build an `Args`, declare its
 // options, then `parse(argv)` returns a boolean (false on a usage error, see @ARG-004);

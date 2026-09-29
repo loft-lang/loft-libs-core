@@ -19,7 +19,7 @@
 // sequences agree" / "this one moved", never "the third value is 313456", and
 // pinning the constants would pin the algorithm the docs call an implementation
 // detail.
-use random;
+use random::*;
 
 // A callee that draws: the parameter example below needs a real call boundary,
 // not an inline block.

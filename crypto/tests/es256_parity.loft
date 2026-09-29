@@ -16,7 +16,7 @@
 // = a 32-byte scalar).  Values are bound to LOCALS before each native call — a
 // bare literal handed straight in as a temporary hits a native store-lifetime
 // bug (arg pointer arrives null).
-use crypto;
+use crypto::*;
 
 fn main() {
   sk = "ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE=";

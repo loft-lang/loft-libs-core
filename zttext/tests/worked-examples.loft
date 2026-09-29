@@ -12,7 +12,7 @@
 // SHAPE of a correct one: an edit is a value you must keep, an offset is measured
 // in the unit the whole engine agrees on, undo is computed against the state
 // BEFORE the edit, and layout only works because measurement is handed in.
-use zttext;
+use zttext::*;
 
 // @ZTX-001 — every edit RETURNS a new Doc and leaves the old one alone.
 // `insert_text`, `delete_range` and `set_style` are pure functions over an

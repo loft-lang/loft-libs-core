@@ -11,7 +11,7 @@
 // library's `base64_decode` is UTF-8-lossy (random non-UTF-8 octets become a
 // 3-byte replacement char), so a decoded length would not equal n.
 
-use crypto;
+use crypto::*;
 
 fn test_random_bytes_length_32() {
   out = crypto::random_bytes(32);

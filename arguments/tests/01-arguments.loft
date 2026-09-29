@@ -1,7 +1,7 @@
 // Copyright (c) 2024-2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Tests for the arguments library.
-use arguments;
+use arguments::*;
 
 // Handler functions: called when specific options are selected
 fn on_verbose(_val: text) -> text {

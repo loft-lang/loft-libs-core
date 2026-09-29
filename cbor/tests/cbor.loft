@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // CBOR encoder — RFC 8949 Appendix A vectors (canonical, byte-identical).
-use cbor;
+use cbor::*;
 
 fn bytes_eq(a: vector<u8>, b: vector<u8>) -> boolean {
   if len(a) != len(b) { return false; }

@@ -27,7 +27,7 @@
 // native store-lifetime bug (the arg's pointer arrives null while its length
 // survives).  Binding first is the ed25519 tests' convention too.
 
-use crypto;
+use crypto::*;
 
 // ── RFC 6979 A.2.5, message "sample" ─────────────────────────────────
 

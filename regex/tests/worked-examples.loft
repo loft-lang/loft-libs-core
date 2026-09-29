@@ -18,7 +18,7 @@
 // rather than silenced, so this file goes red if either ever stops being true.
 // @EXPECT_WARNING: `find` is also a method on `text`
 // @EXPECT_WARNING: `split` is also a method on `text`
-use regex;
+use regex::*;
 
 // @RGX-001 — the spelling decides which library you called, and the wrong one
 // still compiles.  `find` and `split` are stdlib `text` METHODS (literal

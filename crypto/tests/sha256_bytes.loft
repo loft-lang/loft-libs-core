@@ -2,7 +2,7 @@
 // bytes_concat_b64 — the ztcbor signing / content_hash path.  MUST give the
 // identical result on interpret / --native / --native-wasm / --html: this file is
 // the parity check for the four byte bridges the wasm gate depends on.
-use crypto;
+use crypto::*;
 fn main() {
   // sha256_b64 (Python hashlib vectors) — raw / non-UTF-8 byte hashing.
   assert(sha256_b64("") == "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=", "empty");

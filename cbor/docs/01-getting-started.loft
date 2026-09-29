@@ -12,7 +12,7 @@
 // the wire and no validation beyond well-formedness. You build the value; the codec makes
 // its bytes deterministic. Pure loft with no native crate, so it behaves identically on
 // every target by construction.
-use cbor;
+use cbor::*;
 
 fn hex(b: vector<u8>) -> text {
   s = "";
