@@ -21,7 +21,7 @@
 // letters they hold (or which style ids), never in their structure, so the amount of work is
 // the same and no backend can hoist an op out of the repetition loop.  Each op's result is
 // folded into `sink`, printed on the last line.
-use zttext;
+use zttext::*;
 
 /// One measured routine.
 struct Row {

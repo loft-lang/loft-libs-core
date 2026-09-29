@@ -17,7 +17,7 @@
 // the crossing); two are pure loft (`get`, `indices`: the RandStream combined LCG).  Every
 // op seeds its own generator from `r & 1`, so each repetition differs in VALUE and never
 // in the amount of work, and the seeded sequence makes the output a fixed function of it.
-use random;
+use random::*;
 
 /// One measured routine.
 struct Row {

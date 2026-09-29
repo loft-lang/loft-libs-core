@@ -23,7 +23,7 @@
 //
 // Not benched: `ed25519_sign` and `hpke_seal_base_deterministic` — their twins would need
 // real elliptic-curve and AEAD crates, which a std-only single-file twin cannot carry.
-use crypto;
+use crypto::*;
 
 /// One measured routine.
 struct Row {
