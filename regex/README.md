@@ -28,8 +28,13 @@ loft install regex
 
 | Call | Returns | Notes |
 |---|---|---|
-| `regex::matches(pattern: text, input: text) -> boolean` | `true` if `pattern` matches anywhere in `input` | invalid pattern → `false` (never raises) |
-| `regex::find(pattern: text, input: text) -> integer` | byte offset of the first match | `null` when there is no match / invalid pattern |
+| `input.matches(pattern: text) -> boolean` | `true` if `pattern` matches anywhere in `input` | invalid pattern → `false` (never raises) |
+| `input.search(pattern: text) -> integer` | byte offset of the first match | `null` when there is no match / invalid pattern |
+| `input.split_on(pattern: text) -> iterator<text>` | the pieces between matches, lazily | no match → one piece, the whole text |
+
+0.4.0 removed the free functions `regex::find` and `regex::split`: the stdlib's
+`text` methods of the same names took every bare call.  Write `input.search(pattern)`
+and `input.split_on(pattern)` instead.
 
 ## Usage
 
@@ -37,8 +42,8 @@ loft install regex
 use regex;
 
 fn main() {
-    if regex::matches("[0-9]+", "order #123") {
-        print("digits start at {regex::find("[0-9]+", "order #123")}\n");  // 7
+    if "order #123".matches("[0-9]+") {
+        print("digits start at {"order #123".search("[0-9]+")}\n");  // 7
     }
 }
 ```
@@ -48,7 +53,7 @@ later use of the same pattern is a cache hit.
 
 ## Roadmap
 
-Phase 0 ships `matches` / `find`.  `replace` / `replace_all`, `find_all ->
+Phase 0 ships `matches` / `search` / `split_on`.  `replace` / `replace_all`, `find_all ->
 vector<Match>`, capture groups, and named groups are the next increment —
 they return structs / vectors / 3-text-arg text, which the interpreter's
 dlopen marshaller has no signature arm for yet.  That FFI gap is tracked

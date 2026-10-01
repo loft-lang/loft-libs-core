@@ -12,12 +12,6 @@
 // checker can see none of what follows: which spelling actually reaches this
 // library, which UNIT the offset is in, and that a broken pattern answers the
 // same thing as a pattern that simply did not match.
-//
-// The superseded `find` demonstrated by @RGX-001 is what the steer channel exists
-// to warn about, and the shadow it collides with is real — both are asserted here
-// rather than silenced, so this file goes red if either ever stops being true.
-// @EXPECT_WARNING: `find` is also a method on `text`
-// @EXPECT_WARNING: `split` is also a method on `text`
 use regex::*;
 
 // @RGX-001 — the spelling decides which library you called, and the wrong one
@@ -28,9 +22,8 @@ use regex::*;
 // same two texts, and it answers by looking for the literal text `"[0-9]+"`
 // inside `"abc123"` — the arguments read the other way round — so it reports "not
 // found" for a pattern that plainly matches.  That is why this library's
-// recommended verbs are `search` / `split_on`, called subject-first on the text,
-// and why `regex::find` / `regex::split` survive only as `#superseded` spellings
-// reachable through the qualifier.
+// verbs are `search` / `split_on`, called subject-first on the text, and why it
+// has no free `find` / `split`: one would be reachable only through the qualifier.
 fn test_the_spelling_decides_which_library_you_called() {
   // The recommended form: subject-first, on the text.
   assert("abc123".search("[0-9]+") == 3, "search finds the digits at byte 3");

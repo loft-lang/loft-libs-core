@@ -99,25 +99,12 @@ pub fn split_on(self: text, pattern: text) -> iterator<text> {
 }
 
 // --- Superseded spellings (kept working; steered to the clean verbs) ---
-// An earlier release shipped these two extra call styles: a pattern-first free
-// function (`regex::find` / `regex::split`) and a `regex_`-prefixed method
-// (`line.regex_find` / `line.regex_split`).  Both still work unchanged; the
-// recommended-idiom channel (@PLN102 arc C) steers new calls to `search` /
-// `split_on` so the surface converges on one clean spelling per operation.
-
-// Example: @RGX-001 — reachable only as `regex::find`; the bare spelling
-// resolves the stdlib `text` method and answers something else entirely.
-pub fn find(pattern: text, input: text) -> integer {
-  input.search(pattern)
-}
-#superseded "search"
-
-// Example: @RGX-001 — same shadow as `find`: bare `split` is the stdlib's
-// character split, not this one.
-pub fn split(pattern: text, input: text) -> iterator<text> {
-  yield from input.split_on(pattern);
-}
-#superseded "split_on"
+// An earlier release shipped `regex_`-prefixed methods (`line.regex_find` /
+// `line.regex_split`).  They still work unchanged; the recommended-idiom channel
+// (@PLN102 arc C) steers new calls to `search` / `split_on`.  The pattern-first
+// free functions `find` / `split` of that release are gone: the stdlib's `text`
+// methods of the same names take every bare call, and a superseded function
+// that a matching method shadows is removed, not kept (COMPATIBILITY.md).
 
 // `find` as a METHOD on the text, for a caller that prefers `s.regex_find(p)`.
 // Superseded by the stdlib's `search`, which is the same operation without an
