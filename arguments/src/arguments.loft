@@ -42,6 +42,9 @@
 // `parse` answers false only for a real error (a missing required option, an
 // unknown one, an ambiguous prefix); `--help` is a successful parse that sets
 // `wants_help()`, so check that before doing any work.
+//
+// An option is queried by its LONG name; one declared with no long name
+// (`flag("x", "", …)`) is queried by its short name instead.
 
 // A declared option's shape.  `Flag` takes no value; `Value` requires one
 // (`--out x` / `--out=x` / `-ox`); `Optional` accepts one only when glued
@@ -115,6 +118,19 @@ pub fn create(name: text, version: text, description: text) -> Args {
 // --- Declaring options ---
 
 fn register(self: Args, s: text, l: text, an: text, k: ArgKind, req: boolean, desc: text) -> integer {
+  // `enable_help` claims `-h` / `-V` only while they are free, and an option declared
+  // after it takes the letter back: the program's own option outranks the convention.
+  if s.len() > 0 {
+    for auto in [self.help_idx, self.version_idx] {
+      if auto >= 0 && auto < self.options.len() && self.options[auto].short_name == s {
+        ao = self.options[auto];
+        self.options[auto] = Arg {
+          short_name: "", long_name: ao.long_name, arg_name: ao.arg_name, kind: ao.kind,
+          mandatory: ao.mandatory, description: ao.description,
+        };
+      }
+    }
+  }
   self.options += [Arg {
     short_name: s, long_name: l, arg_name: an, kind: k, mandatory: req, description: desc,
   }];
@@ -127,7 +143,8 @@ pub fn flag(self: Args, opt_short: text, opt_long: text, desc: text) {
   self.register(opt_short, opt_long, "", ArgKind.Flag, false, desc);
 }
 
-// An optional value option (`--output FILE`).  `arg_name` is the metavar shown in help.
+// A value option the user may leave out (`--output FILE`); `get` answers null when
+// it was not given.  `arg_name` is the metavar shown in help.
 pub fn option(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text) {
   self.register(opt_short, opt_long, arg_name, ArgKind.Value, false, desc);
 }
@@ -154,9 +171,10 @@ pub fn set_bug_address(self: Args, address: text) { self.bug_address = address; 
 // Set free text printed after the option list in help.
 pub fn set_epilog(self: Args, epilog: text) { self.epilog = epilog; }
 
-// Opt-in: register `--help`/`-h` and `--version`/`-V` (short forms only when free),
-// so `parse` records `--help`/`--version` and `help()` lists them.  Nothing is
-// auto-printed — the caller checks `wants_help()` / `wants_version()`.
+// Opt-in: register `--help`/`-h` and `--version`/`-V`, so `parse` records them and
+// `help()` lists them.  A short form goes to your own option whenever one claims the
+// letter, declared before this call or after it.  Nothing is auto-printed — the caller
+// checks `wants_help()` / `wants_version()`.
 // Example: @ARG-003 — the opt-in dance, and `--help` bypassing the required check.
 pub fn enable_help(self: Args) {
   self.help_enabled = true;
@@ -237,8 +255,14 @@ fn opt_label(self: Args, idx: integer) -> text {
 fn classify(self: Args, argv: vector<text>) -> vector<Tok> {
   toks: vector<Tok> = [];
   past = false;
+  // A value option takes the NEXT word as its value whatever it looks like —
+  // `--num -5`, `-o --` — as getopt_long does; only then is a word lexed again.
+  value_next = false;
   for arg in argv {
-    if past {
+    if value_next {
+      toks += [Pos { word: arg }];
+      value_next = false;
+    } else if past {
       toks += [Pos { word: arg }];
     } else if arg == "--" {
       past = true;
@@ -261,6 +285,7 @@ fn classify(self: Args, argv: vector<text>) -> vector<Tok> {
             toks += [HasVal { idx: li, value: "" }];
           } else {
             toks += [NeedVal { idx: li }];
+            value_next = true;
           }
         }
       } else {
@@ -295,6 +320,7 @@ fn classify(self: Args, argv: vector<text>) -> vector<Tok> {
             toks += [HasVal { idx: si, value: "" }];
           } else {
             toks += [NeedVal { idx: si }];
+            value_next = true;
           }
           break
         }
@@ -386,12 +412,19 @@ pub fn parse(self: Args, argv: vector<text>) -> boolean {
 
 // --- Querying results ---
 
+// Is `name` how a query reaches option `o`: its long name, or its short name when it
+// has no long one.
+fn names(o: Arg, name: text) -> boolean {
+  if o.long_name.len() > 0 { o.long_name == name } else { o.short_name.len() > 0 && o.short_name == name }
+}
+
 // Was this option given?  Ask by the LONG name whatever the user typed — a
-// short, a prefix and the full name all land on the same option.  The one
-// question a `flag` can be asked.
+// short, a prefix and the full name all land on the same option — or by the
+// short name for an option declared without a long one.  The question to ask a
+// `flag`; `get` on one answers "true" or null.
 pub fn has(self: Args, name: text) -> boolean {
   for ho in self.options {
-    if ho.long_name == name {
+    if names(ho, name) {
       hi = ho#index;
       if hi < self.results.len() { return self.results[hi] != null }
       return false
@@ -404,7 +437,7 @@ pub fn has(self: Args, name: text) -> boolean {
 // are this with the absent case already handled, and are usually what you want.
 pub fn get(self: Args, name: text) -> text? {
   for go in self.options {
-    if go.long_name == name {
+    if names(go, name) {
       gi = go#index;
       if gi < self.results.len() { return self.results[gi] }
       return null

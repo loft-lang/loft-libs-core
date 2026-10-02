@@ -1,6 +1,6 @@
 [package]
 name = "arguments"
-version = "0.2.3"
+version = "0.2.4"
 # Requires the cursor / match-PEG engine (@PLN35); pin the exact minimum once
 # that lands in a release.
 loft = ">=0.8"
