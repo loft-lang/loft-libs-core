@@ -58,12 +58,17 @@ pub unsafe fn decode(store: &mut LoftStore, b64: &str) -> LoftRef {
 /// Concatenate the raw bytes behind two base64 strings: `base64(bytes(a) || bytes(b))`.
 ///
 /// A pure text-in / text-out primitive — it never touches the loft store — so
-/// labeled byte strings (`"HPKE-v1" || suite_id || label || ikm`) can be
-/// assembled in loft *without* a `vector<u8>` accumulator, side-stepping the
-/// store-reallocation hazard of appending onto a store-allocated byte vector.
+/// labeled byte strings (`"HPKE-v1" || suite_id || label || ikm`) are assembled
+/// in loft in the base64 text every primitive takes and answers.  "" when either
+/// argument is not base64.
 #[must_use]
 pub fn concat_b64(a_b64: &str, b_b64: &str) -> String {
-    let mut bytes = crate::base64::decode(a_b64);
-    bytes.extend_from_slice(&crate::base64::decode(b_b64));
+    let (Some(mut bytes), Some(b)) = (
+        crate::base64::try_decode(a_b64),
+        crate::base64::try_decode(b_b64),
+    ) else {
+        return String::new();
+    };
+    bytes.extend_from_slice(&b);
     crate::base64::encode(&bytes)
 }

@@ -111,7 +111,9 @@ pub fn sign(secret_b64: &str, message_b64: &str) -> String {
     let Ok(sk) = SigningKey::from_slice(&d) else {
         return String::new();
     };
-    let msg = crate::base64::decode(message_b64);
+    let Some(msg) = crate::base64::try_decode(message_b64) else {
+        return String::new();
+    };
     // `Signer::sign` on an ECDSA SigningKey hashes with SHA-256 (P-256's associated digest) and
     // uses RFC 6979 — i.e. exactly ES256. `to_bytes()` is the fixed 64-byte r||s.
     let sig: Signature = sk.sign(&msg);
@@ -139,7 +141,9 @@ pub fn verify(public_b64: &str, message_b64: &str, signature_b64: &str) -> bool 
     let Ok(sig) = Signature::from_slice(&sig_bytes) else {
         return false;
     };
-    let msg = crate::base64::decode(message_b64);
+    let Some(msg) = crate::base64::try_decode(message_b64) else {
+        return false;
+    };
     vk.verify(&msg, &sig).is_ok()
 }
 
@@ -151,17 +155,32 @@ mod tests {
     #[test]
     fn generate_sign_verify_round_trip() {
         let sk = generate();
-        assert_eq!(crate::base64::decode(&sk).len(), 32, "secret is a 32-byte scalar");
+        assert_eq!(
+            crate::base64::decode(&sk).len(),
+            32,
+            "secret is a 32-byte scalar"
+        );
         let pk = public_key(&sk);
-        assert_eq!(crate::base64::decode(&pk).len(), 64, "public key is 64-byte x||y");
+        assert_eq!(
+            crate::base64::decode(&pk).len(),
+            64,
+            "public key is 64-byte x||y"
+        );
 
         let msg = crate::base64::encode(b"ACME newOrder payload");
         let sig = sign(&sk, &msg);
-        assert_eq!(crate::base64::decode(&sig).len(), 64, "signature is 64-byte r||s");
+        assert_eq!(
+            crate::base64::decode(&sig).len(),
+            64,
+            "signature is 64-byte r||s"
+        );
         assert!(verify(&pk, &msg, &sig), "a fresh signature verifies");
 
         let other = crate::base64::encode(b"a different payload");
-        assert!(!verify(&pk, &other, &sig), "the signature does not verify a different message");
+        assert!(
+            !verify(&pk, &other, &sig),
+            "the signature does not verify a different message"
+        );
     }
 
     // Deterministic (RFC 6979): the SAME key + message signs to the SAME bytes every time. This is
@@ -170,7 +189,11 @@ mod tests {
     fn signing_is_deterministic() {
         let sk = generate();
         let msg = crate::base64::encode(b"determinism check");
-        assert_eq!(sign(&sk, &msg), sign(&sk, &msg), "RFC 6979 — identical signatures");
+        assert_eq!(
+            sign(&sk, &msg),
+            sign(&sk, &msg),
+            "RFC 6979 — identical signatures"
+        );
     }
 
     // A known secret scalar produces a known public key, and its deterministic signature over a
@@ -193,14 +216,21 @@ mod tests {
         assert_eq!(&xy[32..], &gy, "y coordinate is Gy for d=1");
 
         let msg = crate::base64::encode(b"anchored");
-        assert!(verify(&pk, &msg, &sign(&d1, &msg)), "d=1 signs and verifies");
+        assert!(
+            verify(&pk, &msg, &sign(&d1, &msg)),
+            "d=1 signs and verifies"
+        );
     }
 
     #[test]
     fn rejects_bad_inputs_without_panic() {
         assert_eq!(public_key("not-32-bytes"), "");
         assert_eq!(sign("short", &crate::base64::encode(b"m")), "");
-        assert!(!verify("short-pk", &crate::base64::encode(b"m"), "short-sig"));
+        assert!(!verify(
+            "short-pk",
+            &crate::base64::encode(b"m"),
+            "short-sig"
+        ));
     }
 
     fn hex<const N: usize>(s: &str) -> [u8; N] {

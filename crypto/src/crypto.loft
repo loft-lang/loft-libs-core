@@ -1,14 +1,13 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // --- Crypto ---
-// Cryptographic primitives: hashing, HMAC, base64.
+// Cryptographic primitives: SHA-256 and HMAC, base64, Ed25519 and ES256
+// signatures, X25519 key agreement, HKDF, AES-256-GCM, a CSPRNG, and HPKE base
+// mode built from them.
 //
-// JWT signing was removed 2026-05-30 — the previous `jwt_sign` was an
-// HS256-only proof-of-concept with no verify counterpart, no claim
-// helpers, no key-rotation support, no consumers in any loft library
-// or tool, and no tests.  When a real auth use case lands, JWT
-// belongs in a dedicated `lib/auth/` package with proper algorithm
-// coverage (RS256/ES256) and a full sign+verify+claim API.
+// Bytes cross the API as standard base64 `text`.  Input that is not base64 is
+// refused the way each function refuses anything malformed — "" or false, never
+// a result computed from other bytes than the ones sent.
 
 // --- Internal natives ---
 //
@@ -93,8 +92,9 @@ pub fn sha256(data: text) -> text {
 }
 
 // SHA-256 of the RAW BYTES decoded from base64 `data_b64`. Returns base64 of the
-// 32-byte digest. Use this to hash arbitrary byte strings (ciphertext, canonical
-// CBOR) that are not valid UTF-8 and so cannot be passed to `sha256` as text.
+// 32-byte digest, or "" when `data_b64` is not base64. Use this to hash arbitrary
+// byte strings (ciphertext, canonical CBOR) that are not valid UTF-8 and so cannot
+// be passed to `sha256` as text.
 // Example: @CRY-001 — the two hashing doors: text in / hex out vs base64 both ways.
 pub fn sha256_b64(data_b64: text) -> text {
   sha256_b64_native(data_b64)
@@ -110,7 +110,8 @@ pub fn base64_encode(data: text) -> text {
   base64_encode_native(data)
 }
 
-// Base64 decode a string.
+// Base64 decode to text.  "" when `data` is not base64, or when its bytes are not
+// UTF-8 — those are not text; `base64_to_bytes` reads them.
 pub fn base64_decode(data: text) -> text {
   base64_decode_native(data)
 }
@@ -199,14 +200,16 @@ pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text {
 //
 // Derive `length` bytes of output keying material from `ikm`, `salt`, and
 // `info` (each base64).  An empty base64 `salt` selects the all-zero salt.
-// Returns the base64 OKM, or "" if `length` exceeds 255*32 or is <= 0.
+// Returns the base64 OKM, or "" if `length` exceeds 255*32 or is <= 0, or an
+// argument is not base64.
 // Example: @CRY-004 — `info` is what separates two keys from one shared secret.
 pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text {
   hkdf_sha256_native(salt_b64, ikm_b64, info_b64, length)
 }
 
 // HKDF-Extract (RFC 5869 §2.2): the 32-byte PRK (base64) HMAC-SHA256(salt, ikm).
-// An empty base64 `salt` selects the all-zero salt.  Use the Extract/Expand
+// An empty base64 `salt` selects the all-zero salt; "" when an argument is not
+// base64.  Use the Extract/Expand
 // halves directly (rather than `hkdf_sha256`) when a PRK is reused for several
 // Expands or when an Extract output is itself the value you want (e.g. HPKE).
 // Example: @CRY-004 — the split halves compose to exactly `hkdf_sha256`.
@@ -215,7 +218,8 @@ pub fn hkdf_extract(salt_b64: text, ikm_b64: text) -> text {
 }
 
 // HKDF-Expand (RFC 5869 §2.3) from an existing 32-byte PRK.  Returns `length`
-// bytes of OKM (base64), or "" on a short PRK, length > 255*32, or length <= 0.
+// bytes of OKM (base64), or "" on a short PRK, length > 255*32, length <= 0, or
+// an argument that is not base64.
 pub fn hkdf_expand(prk_b64: text, info_b64: text, length: integer) -> text {
   hkdf_expand_native(prk_b64, info_b64, length)
 }
@@ -224,23 +228,15 @@ pub fn hkdf_expand(prk_b64: text, info_b64: text, length: integer) -> text {
 //
 // loft `text` is UTF-8-validated, so a non-UTF-8 byte string cannot ride as
 // `text` (`text_from_bytes` returns "").  These two inverse helpers move raw
-// bytes across the base64 boundary instead.
-//
-// CAUTION — a `vector<u8>` returned by `base64_to_bytes` is sound to READ
-// (index, iterate, pass by value, or concatenate INTO a fresh loft vector with
-// `fresh += decoded`), but do NOT use it as the left-hand accumulator of `+=`
-// (`decoded += more`): in-place growth of a store-allocated byte vector after a
-// later store allocation currently corrupts it (a loft FFI-vector bug).  To
-// concatenate base64 byte strings, prefer composing in base64 throughout (see
-// how the HPKE code below uses `bytes_concat_b64_native`).
+// bytes across the base64 boundary instead.  The vector `base64_to_bytes`
+// answers is an ordinary one: read it, append to it, pass it on.
 
 // Standard base64 of a raw byte vector.  Empty vector -> "".
 pub fn bytes_to_base64(bytes: vector<u8>) -> text {
   bytes_to_base64_native(bytes)
 }
 
-// Raw bytes from standard base64.  Malformed / empty input -> empty vector.
-// See the CAUTION above: read the result, never `+=` onto it.
+// Raw bytes from standard base64.  Input that is not base64, or empty, -> empty vector.
 // Example: @CRY-001 — reading a decoded byte vector, and hashing non-UTF-8 bytes.
 pub fn base64_to_bytes(b64: text) -> vector<u8> {
   base64_to_bytes_native(b64)
@@ -254,7 +250,7 @@ pub fn base64_to_bytes(b64: text) -> vector<u8> {
 
 // Encrypt + authenticate `plaintext` under `key`/`nonce`, binding `aad`.
 // Returns base64 of ciphertext WITH the 16-byte tag appended, or "" on bad
-// key/nonce length.
+// key/nonce length or an argument that is not base64.
 // Example: @CRY-005 — the tag rides in the blob, and a fresh nonce per message.
 pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text {
   aes256gcm_seal_native(key_b64, nonce_b64, aad_b64, plaintext_b64)
@@ -293,11 +289,8 @@ pub fn random_bytes(length: integer) -> text {
 // Byte composition stays entirely in base64 `text`: every byte chunk (labels,
 // suite ids, keys, DH outputs) is a base64 string, and `bytes_concat_b64`
 // concatenates the underlying raw bytes.  ASCII labels are base64-encoded with
-// the existing `base64_encode` (ASCII is valid UTF-8).  This avoids composing
-// in a store-allocated `vector<u8>`, whose in-place `+=` growth currently
-// corrupts after an intervening store allocation (a loft FFI-vector bug — see
-// the public `bytes_to_base64` / `base64_to_bytes` note below; they are sound
-// for read-only use, just not as a `+=` accumulator).
+// the existing `base64_encode` (ASCII is valid UTF-8), so every intermediate is
+// the base64 text the primitives take and answer.
 
 // base64(bytes(a) || bytes(b)) — concatenate two base64 byte strings.
 fn concat(a_b64: text, b_b64: text) -> text {

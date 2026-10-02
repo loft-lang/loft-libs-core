@@ -27,8 +27,12 @@ use sha2::Sha256;
 /// [`sha256`].
 #[must_use]
 pub fn extract(salt_b64: &str, ikm_b64: &str) -> String {
-    let salt = crate::base64::decode(salt_b64);
-    let ikm = crate::base64::decode(ikm_b64);
+    let (Some(salt), Some(ikm)) = (
+        crate::base64::try_decode(salt_b64),
+        crate::base64::try_decode(ikm_b64),
+    ) else {
+        return String::new();
+    };
     let salt_opt = if salt.is_empty() {
         None
     } else {
@@ -52,8 +56,12 @@ pub fn expand(prk_b64: &str, info_b64: &str, length: i32) -> String {
         return String::new();
     }
     let length = length as usize;
-    let prk = crate::base64::decode(prk_b64);
-    let info = crate::base64::decode(info_b64);
+    let (Some(prk), Some(info)) = (
+        crate::base64::try_decode(prk_b64),
+        crate::base64::try_decode(info_b64),
+    ) else {
+        return String::new();
+    };
     let Ok(hk) = Hkdf::<Sha256>::from_prk(&prk) else {
         return String::new(); // prk shorter than HashLen
     };
@@ -78,9 +86,13 @@ pub fn sha256(salt_b64: &str, ikm_b64: &str, info_b64: &str, length: i32) -> Str
         return String::new();
     }
     let length = length as usize;
-    let salt = crate::base64::decode(salt_b64);
-    let ikm = crate::base64::decode(ikm_b64);
-    let info = crate::base64::decode(info_b64);
+    let (Some(salt), Some(ikm), Some(info)) = (
+        crate::base64::try_decode(salt_b64),
+        crate::base64::try_decode(ikm_b64),
+        crate::base64::try_decode(info_b64),
+    ) else {
+        return String::new();
+    };
 
     // An empty base64 salt means "no salt" — RFC 5869 §2.2 then uses a string
     // of HashLen zeros, which is exactly what `Hkdf::new(None, ..)` does.
