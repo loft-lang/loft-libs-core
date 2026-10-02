@@ -75,7 +75,7 @@ enum Tok {
 // prefix-consumes from `pos` and advances it (see @PLN35).
 struct Cur { const src: vector<Tok>, pos: integer }
 
-struct Args {
+pub struct Args {
   const name: text,
   const version: text,
   const description: text,
