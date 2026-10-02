@@ -6,21 +6,20 @@
 // future IDE / slides / spreadsheet surfaces later — "switch the surface" means swap the
 // layout bundle, the content core is unchanged.
 //
-// Design: doc/EDITOR_DESIGN.md (direction) → doc/ZTTEXT_NOTATION.md (the formal model,
-// invariants I1–I9) → doc/ZTTEXT_PLAN.md (the M0–M5 build plan, ~37 small safe steps).
-// This file is that plan, made concrete. Everything here is pure Tier-1 loft with
+// Design: `doc/EDITOR_DESIGN.md` (direction) and `doc/ZTTEXT_NOTATION.md` (the formal
+// model, invariants I1–I9, which the comments below cite) in the zero-trust-shared-files
+// repository this engine was extracted from.  Everything here is pure Tier-1 loft with
 // measurement injected, so it is identical on interpret / native / native-wasm / browser
 // by construction (invariant I8, the parity theorem).
 //
-// Three loft traps designed out from step one: offsets are CHARACTER positions, never
-// bytes (the multi-byte truncation trap, @PLN110) — the buffer is a vector<character> so
-// every offset is a character index natively; the buffer is APPEND-ONLY (deleted text
-// stays, so undo can restore it); the piece vector is REBUILT, never element-swapped
-// (loft #338 in-place-swap loses records).
+// Three choices made from step one: offsets are CHARACTER positions, never bytes (the
+// multi-byte truncation trap, @PLN110) — the buffer is a vector<character> so every offset
+// is a character index natively; the buffer is APPEND-ONLY (deleted text stays, so undo can
+// restore it); and a piece is an immutable value, so an edit REBUILDS the piece sequence
+// rather than changing a piece in place.
 
-// The library's own version marker — a scaffold anchor so the parity harness (interpret ==
-// native == native-wasm) exists before any engine logic lands.
-pub fn zttext_version() -> text { return "0.1.0-dev"; }
+// The version of this source — the `version` in its `loft.toml`, bumped with it.
+pub fn zttext_version() -> text { return "0.1.3"; }
 
 // ===================================================================================
 // M0 — content core (Layer 1).   Notation §2, §3, §8.   Invariant I1 (fidelity + inverse).
@@ -365,6 +364,8 @@ pub struct Rect { x: float, y: float, w: float, h: float }
 // `hyphen` marks a synthetic line-end hyphen glyph (from a discretionary break, S4.7):
 // it renders "-" rather than its κ text, and κ points at the soft-hyphen it stands in for.
 pub struct Box  { rect: Rect, ks: integer, ke: integer, style: integer, hyphen: boolean = false }
+// The boxes of a laid-out text: one `Box` per glyph run, in layout order.  What `flow_layout`
+// returns.
 pub struct BoxSet { boxes: vector<Box> }
 
 // A laid-out visual line: the logical char span [cs,ce) its boxes cover, its top y and its
@@ -1420,8 +1421,11 @@ pub fn layout_columns(d: Doc, g: PageGeom, resolve: fn(integer) -> Style, measur
 // mode: IMG_LEFT → float left, text wraps right; IMG_FULL → full-width block, text below;
 // IMG_RIGHT → float right, text wraps left. Placed at the flow position when reached.
 pub struct FlowImage { at: integer, mode: integer, w: float, h: float, id: integer }
+// `FlowImage.mode`: float left, text wraps on the right.
 pub const IMG_LEFT = 0;
+// `FlowImage.mode`: a full-width block, text resumes below it.
 pub const IMG_FULL = 1;
+// `FlowImage.mode`: float right, text wraps on the left.
 pub const IMG_RIGHT = 2;
 
 // a horizontal interval (internal to the free-span computation).

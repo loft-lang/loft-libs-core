@@ -97,7 +97,7 @@ fn repeat_word(n: integer) -> text {
 
 // ============================ S0.1 scaffold ============================
 fn test_scaffold() {
-  assert(zttext_version() == "0.1.0-dev", "scaffold: version constant is reachable");
+  assert(zttext_version() == "0.1.3", "zttext_version answers the manifest's version");
 }
 
 // ============================ S0.2 materialise + length ============================

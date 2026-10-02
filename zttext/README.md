@@ -52,7 +52,13 @@ a value, `@ZTX-002` character offsets and the append-only buffer, `@ZTX-003` und
 against the pre-state, `@ZTX-004` layout is portable because measurement is an
 argument.
 
+## Getting started
+
+[docs/01-getting-started.loft](docs/01-getting-started.loft) — an edit, its undo, a layout
+and the hit-tests, as a program that runs on every backend.
+
 ## Design
 
-`doc/EDITOR_DESIGN.md` (direction) → `doc/ZTTEXT_NOTATION.md` (the formal model,
-invariants I1–I9) → `doc/ZTTEXT_PLAN.md` (the M0–M5 build plan).
+The engine was extracted from the zero-trust-shared-files application, whose
+`doc/EDITOR_DESIGN.md` (direction) and `doc/ZTTEXT_NOTATION.md` (the formal model,
+invariants I1–I9) the comments in `src/zttext.loft` and the tests cite.
