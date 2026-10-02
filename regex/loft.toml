@@ -1,6 +1,6 @@
 [package]
 name = "regex"
-version = "0.4.1"
+version = "0.4.2"
 loft = ">=0.8"
 description = "Small-script regex: `search`, `matches` and a lazy `split_on`, with a thread-local pattern cache."
 

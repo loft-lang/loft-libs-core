@@ -7,8 +7,8 @@
 // scanning, CLI fields, quick extraction).  You pass the pattern inline;
 // compiled patterns are cached in a thread-local table, so repeated calls
 // with the same pattern are cheap.  Structured parsing — grammars, ASTs,
-// recursion — is NOT this library's job; that is the match-pattern parser
-// framework (jjstwerff/loft `plans/.../26-match-peg`).
+// recursion — is NOT this library's job; that is loft's `match` patterns over
+// a cursor (the `arguments` library's parser is written with them).
 //
 // The public API is subject-first text methods, named with the conventional
 // regex verbs so they read naturally on a `text`:
@@ -107,9 +107,9 @@ pub fn split_on(self: text, pattern: text) -> iterator<text> {
 // that a matching method shadows is removed, not kept (COMPATIBILITY.md).
 
 // `find` as a METHOD on the text, for a caller that prefers `s.regex_find(p)`.
-// Superseded by the stdlib's `search`, which is the same operation without an
-// import — the prefix exists only because a bare `find` resolves to the
-// stdlib's method first.
+// Superseded by this library's `search`, the same operation under the
+// conventional regex verb — the prefix existed only because a bare `find`
+// resolves to the stdlib's literal-substring method first.
 pub fn regex_find(self: text, pattern: text) -> integer {
   self.search(pattern)
 }

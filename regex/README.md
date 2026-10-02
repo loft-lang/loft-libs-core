@@ -53,12 +53,11 @@ later use of the same pattern is a cache hit.
 
 ## Roadmap
 
-Phase 0 ships `matches` / `search` / `split_on`.  `replace` / `replace_all`, `find_all ->
-vector<Match>`, capture groups, and named groups are the next increment —
-they return structs / vectors / 3-text-arg text, which the interpreter's
-dlopen marshaller has no signature arm for yet.  That FFI gap is tracked
-in the regex plan (jjstwerff/loft `lib_plans/.../01-regex`), not worked
-around here.
+`matches` / `search` / `split_on` ship.  `replace` / `replace_all`, `find_all ->
+vector<Match>`, capture groups and named groups are not built yet; the native bridge
+can answer a vector or a record (the `crypto` library's `base64_to_bytes` does), so
+nothing outside this library stands in their way.  loft's plan for this library is
+`doc/claude/lib_plans/57-regex/` in the loft repository.
 
 ## Worked examples
 
@@ -74,6 +73,6 @@ ones — and never yields zero pieces.
 ## Provenance
 
 Native crate `loft_regex` wraps the Rust `regex` crate — the same shape
-as this chunk's `random` (wraps `rand_pcg`) and `crypto` (wraps pure-Rust
-SHA/base64).  Built directly in `loft-libs-core` rather than extracted
+as this chunk's `random` (wraps `rand_pcg`) and `crypto` (wraps the pure-Rust
+RustCrypto and dalek crates).  Built directly in `loft-libs-core` rather than extracted
 from the monorepo.
