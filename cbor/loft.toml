@@ -1,8 +1,8 @@
 [package]
 name = "cbor"
-version = "0.1.9"
+version = "0.1.10"
 description = "Signable canonical CBOR (RFC 8949), pure loft — canonical map-key ordering, full decode, byte-identical encode->decode->encode, native == wasm."
-loft = ">=0.8"
+loft = ">=2026.7.2"
 api_compatible_with  = "0.1.1"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.1"   # oldest own release whose stored data this reads
 repository = "loft-libs-core"
