@@ -1,7 +1,7 @@
 [package]
 name = "regex"
-version = "0.4.2"
-loft = ">=0.8"
+version = "0.4.3"
+loft = ">=2026.10.0"
 description = "Small-script regex: `search`, `matches` and a lazy `split_on`, with a thread-local pattern cache."
 
 api_compatible_with  = "0.4.0"   # oldest own release this is a drop-in for
