@@ -1,0 +1,132 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Edit a document as a value, lay it out with the measurer you hand in, and hit-test the boxes.
+//
+// `zttext` is a text ENGINE: a document you edit (a piece table over an append-only buffer),
+// transactions you can undo, and a layout that turns the document into positioned boxes you
+// can hit-test — a caret, a selection, the word under a double-click. Everything is plain
+// loft, and measurement is an argument, so the same document lays out to the same boxes on
+// every backend.
+//
+// It does not draw. A box is a rectangle plus the characters it holds; painting it is the job
+// of whatever surface you have — `text2d` draws text on a `graphics` canvas, a browser page
+// draws it in the DOM. It does not parse markup either: for Markdown to HTML, use `markdown`.
+// And it carries no fonts: `mono_measure` is a deterministic stand-in, and a real surface
+// passes its own measurer.
+use zttext::*;
+
+fn main() {
+  d = doc_from_text("hello world", 0);
+  d = insert_text(d, 5, ",", 0);
+  boxes = flow_layout(d, default_resolver, mono_measure, 8.0);
+  print(render_dump(boxes, d));
+
+  assert(materialise(d) == "hello, world", "the edit is in the document you bound");
+  assert(len(boxes.boxes) == 3 && boxset_height(boxes) == 2.0, "two lines at width 8");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  an_edit_is_a_value();
+  edits_undo_as_transactions();
+  layout_is_yours_to_measure();
+  the_boxes_answer_the_pointer();
+}
+
+// That prints one line per box — `[x,y,w,h] chars style 'text'`:
+//
+//     [0.0,0.0,5.0,1.0] 0..5 s=0 'hello'
+//     [5.0,0.0,1.0,1.0] 5..6 s=0 ','
+//     [0.0,1.0,5.0,1.0] 7..12 s=0 'world'
+//
+// `hello, world` is 12 wide under `mono_measure` (one unit per character), the column is 8,
+// so the line breaks at the space and the space itself is dropped. The comma is its own box
+// because it was inserted as its own piece; the boxes carry the character span they cover,
+// which is what every interaction below is built on.
+//
+// ## The one that bites: an edit RETURNS the document
+//
+// `insert_text`, `delete_range` and `set_style` do not change the document you pass. They
+// answer a new one and leave the old one alone. So `insert_text(d, 0, "x", 0);` as a
+// statement compiles, runs, and throws the edit away — an editor where typing does nothing,
+// with nothing reported. Bind the result, every time. What you get for it: the previous
+// state is still a live value, so history is just a list of documents.
+
+fn an_edit_is_a_value() {
+  base = doc_from_text("hello", 0);
+  insert_text(base, 0, "XYZ", 0);
+  assert(materialise(base) == "hello", "a discarded edit is lost");
+
+  edited = insert_text(base, 5, "!", 0);
+  assert(materialise(edited) == "hello!" && materialise(base) == "hello", "two live documents");
+  history = [base, edited];
+  assert(len(history) == 2, "history is a vector of values");
+  println("value   : an edit answers a NEW document; bind it");
+}
+
+// ## Transactions, and undo against the state BEFORE
+//
+// `txn_of` bundles operations — `Ins`, `Del`, `Sty` — into one transaction, the unit of
+// undo, and `apply` runs it. `invert(pre, txn)` builds its undo, and it needs the document as
+// it was BEFORE the transaction: the inverse of a deletion is an insertion of what was there,
+// which only the earlier state knows. The undo restores per-character styles too, so undoing
+// a deletion over formatted text brings the formatting back.
+
+fn edits_undo_as_transactions() {
+  styled = set_style(doc_from_text("hello, world", 0), 0, 5, 3);
+  t = txn_of([Del { from: 5, to: 6 }]);
+  after = apply(styled, t);
+  back = apply(after, invert(styled, t));
+
+  assert(materialise(after) == "hello world", "the comma is gone");
+  assert(materialise(back) == "hello, world", "undo puts it back");
+  assert("{char_styles(back)}" == "[3,3,3,3,3,0,0,0,0,0,0,0]", "with the style on 'hello'");
+  println("undo    : invert against the state BEFORE the edit");
+}
+
+// ## Layout takes the measurer as an argument
+//
+// `flow_layout(doc, resolve, measure, width)` asks for a `resolve` (style id → `Style`) and a
+// `measure` (text and `Style` → width). It never calls a font engine, which is why a layout is
+// the same on the interpreter, natively and in a browser: the ports decide, and you hand them
+// in. `default_resolver` and `mono_measure` are the deterministic pair to start and test with;
+// a real surface passes functions of its own with the same signatures. `flow_layout_full`
+// answers the lines too, and `line_assignment` just the lines.
+
+fn layout_is_yours_to_measure() {
+  d = doc_from_text("alpha beta gamma delta", 0);
+  narrow = flow_layout(d, default_resolver, mono_measure, 12.0);
+  wide = flow_layout(d, default_resolver, mono_measure, 40.0);
+  assert(boxset_height(narrow) == 2.0, "two lines in a column of 12");
+  assert(boxset_height(wide) == 1.0, "one line in a column of 40");
+  assert(len(line_assignment(d, default_resolver, mono_measure, 12.0)) == 2, "the lines agree");
+  println("layout  : the same document, the measurer and width decide the lines");
+}
+
+// ## The boxes answer the pointer
+//
+// A box knows the characters it covers, so the questions an editor asks are answered from
+// the boxes alone: `anchor_at` turns a point into a character position (a click), `caret_at`
+// turns a position into the rectangle to draw the cursor in, `sel` lists the boxes a range
+// covers, and `word_at` answers the word a double-click selects.
+
+fn the_boxes_answer_the_pointer() {
+  d = doc_from_text("hello, world", 0);
+  boxes = flow_layout(d, default_resolver, mono_measure, 8.0);
+
+  assert(anchor_at(boxes, d, 2.4, 0.5, default_resolver, mono_measure) == 2, "a click between 'he' and 'llo'");
+  c = caret_at(boxes, d, 7, default_resolver, mono_measure);
+  assert(c.x == 0.0 && c.y == 1.0 && c.w == 0.0, "position 7 starts the second line");
+  assert("{sel(boxes, 3, 9)}" == "[0,1]", "a range across the break covers the box on each line");
+  w = word_at(d, 8);
+  assert(w.0 == 7 && w.1 == 12, "the word under position 8 is 'world'");
+  println("pointer : click, caret, selection and word, all from the boxes");
+}
+
+// ## Where to go next
+//
+// - `README.md` — the layers and their entry points, and the four contracts above in brief.
+// - `tests/worked-examples.loft` — `@ZTX-001` … `@ZTX-004`, those contracts as running tests.
+// - `tests/zttext.loft` — every invariant the engine keeps, including pagination
+//   (`paginate`, `layout_page`), columns and floating images (`layout_page_columns`),
+//   incremental relayout (`patch`) and justification.

@@ -87,5 +87,20 @@ fn main() {
   assert(!decode([0x18 as u8, 0x00 as u8]).ok, "overlong head rejected");
   assert(!decode([0x00 as u8, 0x00 as u8]).ok, "trailing bytes rejected");
 
+  // Nesting: MAX_DEPTH levels decode, one more is refused, and a hostile stream of
+  // array heads far past it answers ok=false instead of exhausting the call stack.
+  assert(decode(nested_arrays(MAX_DEPTH)).ok, "MAX_DEPTH levels decode");
+  assert(!decode(nested_arrays(MAX_DEPTH + 1)).ok, "one level more is refused");
+  assert(!decode(nested_arrays(100000)).ok, "100000 levels are refused, not a crash");
+  assert(roundtrip(CArray { items: [CArray { items: [CInt { value: 1 }] }] }), "shallow nesting still round-trips");
+
   println("cbor: all RFC 8949 vectors pass");
+}
+
+// A null inside `depth` one-element arrays: a value at nesting depth `depth`.
+fn nested_arrays(depth: integer) -> vector<u8> {
+  b: vector<u8> = [];
+  for _i in 0..depth { b += [0x81 as u8]; }
+  b += [0xf6 as u8];
+  b
 }

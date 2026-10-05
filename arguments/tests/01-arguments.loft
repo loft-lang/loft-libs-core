@@ -405,3 +405,43 @@ fn test_help_text() {
   assert(tht_help.contains("Usage:"), "usage in help");
   assert(tht.version_text().contains("3.0"), "version in version_text");
 }
+
+// A value option takes the next word as its value whatever it looks like, as getopt_long does.
+fn test_value_that_looks_like_an_option() {
+  a = arguments::create("p", "1", "d");
+  a.option("n", "num", "N", "a number");
+  a.flag("v", "verbose", "v");
+  assert(a.parse(["--num", "-5"]), "--num -5 parses");
+  assert(a.get_int("num") == -5, "…and -5 is the value: {a.get(\"num\")}");
+  assert(a.parse(["-n", "--verbose"]), "-n --verbose parses");
+  assert(a.get("num") == "--verbose" && !a.has("verbose"), "…the word is the value, not the flag");
+  assert(a.parse(["--num", "--", "x"]), "--num -- parses");
+  assert(a.get("num") == "--" && a.positionals[0] == "x", "…`--` is the value and option parsing goes on");
+  assert(!a.parse(["--num"]), "a missing value is still an error");
+  assert(a.error_msg() == "option '--num' requires an argument", "…with its message");
+}
+
+// `enable_help` claims -h / -V only while no option of the program's own wants them.
+fn test_help_gives_short_letters_back() {
+  a = arguments::create("p", "1", "d");
+  a.enable_help();
+  a.option("h", "host", "HOST", "the host");
+  assert(a.parse(["-h", "example.org"]), "-h parses");
+  assert(a.get("host") == "example.org" && !a.wants_help(), "…as the program's -h, declared after enable_help");
+  assert(a.parse(["--help"]), "--help still parses");
+  assert(a.wants_help(), "…as help");
+  assert(!a.help().contains("-h, --help"), "help lists --help without the letter it gave away");
+  b = arguments::create("p", "1", "d");
+  b.enable_help();
+  assert(b.parse(["-h"]) && b.wants_help(), "with no rival, -h is help");
+}
+
+// An option declared with no long name is queried by its short one.
+fn test_short_only_option() {
+  a = arguments::create("p", "1", "d");
+  a.flag("x", "", "short only");
+  a.option("o", "", "FILE", "short only, with a value");
+  assert(a.parse(["-x", "-o", "f.txt"]), "parses");
+  assert(a.has("x") && a.get("o") == "f.txt", "reached by the short name");
+  assert(!a.has(""), "the empty name reaches nothing");
+}

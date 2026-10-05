@@ -14,9 +14,9 @@
 // bridge, and no external-crate trust surface — and the codec runs identically
 // native and in the browser (native == wasm) by construction.
 //
-// Build a `CborValue` and `encode` it; the canonical encoder picks shortest-form
-// integer/length heads.  (Map-key canonical ordering, decode, and the typed
-// `T.to_cbor()` path land in later phases — see the plan.)
+// Build a `CborValue` and `encode` it: the canonical encoder picks shortest-form
+// integer/length heads and sorts a map's entries by their encoded keys.  `decode`
+// reads canonical bytes back and refuses anything else.
 
 /// A dynamic CBOR value.  Mirrors the stdlib `JsonValue`, with CBOR's extra
 /// `CBytes` (native byte string) and the integer split that CBOR makes at the
@@ -186,20 +186,27 @@ pub fn encode(v: CborValue) -> vector<u8> {
 
 /// The result of decoding one CBOR value: the `value`, the byte position just
 /// past it (`next`), and `ok` — false on any malformed / non-canonical /
-/// truncated input.  Decoding never crashes (loft-safe): a bad byte stream
-/// yields ok=false rather than a trap.
+/// truncated input, and on nesting deeper than `MAX_DEPTH`.  Decoding never
+/// crashes (loft-safe): a bad byte stream yields ok=false rather than a trap.
 pub struct Decoded {
   const value: CborValue,
   const next:  integer,
   const ok:    boolean,
 }
 
-// Decode one CBOR value starting at `pos`.  Recursive: arrays/maps thread the
-// running position through their children.  Enforces canonical shortest-form
-// heads (an overlong argument is rejected) and definite lengths only.
-fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
+/// How deep arrays and maps may nest in bytes `decode` accepts — a value inside
+/// `MAX_DEPTH` enclosing arrays or maps is the deepest that decodes.  Deeper input is
+/// refused with ok=false: each level is one call, and a hostile byte stream of
+/// nothing but array heads would otherwise exhaust the call stack.
+pub const MAX_DEPTH = 256;
+
+// Decode one CBOR value starting at `pos`, `depth` levels inside the top-level one.
+// Recursive: arrays/maps thread the running position through their children.
+// Enforces canonical shortest-form heads (an overlong argument is rejected),
+// definite lengths only, and `MAX_DEPTH`.
+fn read_value(bytes: vector<u8>, pos: integer, depth: integer) -> Decoded {
   n = len(bytes);
-  if pos >= n { return Decoded { value: CNull, next: pos, ok: false }; }
+  if pos >= n || depth > MAX_DEPTH { return Decoded { value: CNull, next: pos, ok: false }; }
   // Every `bytes[…]` read below is already bounds-guarded (the `>= n` checks set
   // `argok = false`), so `?? 0` only discharges the nullable-index type the current
   // loft gives `bytes[i]` (@PLN25) — the default is never actually reached.
@@ -259,7 +266,7 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
     aok = true;
     for _ in 0..arg {
       if aok {
-        sub = read_value(bytes, p);
+        sub = read_value(bytes, p, depth + 1);
         if sub.ok { items += [sub.value]; p = sub.next; } else { aok = false; }
       }
     }
@@ -272,9 +279,9 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
     mok = true;
     for _ in 0..arg {
       if mok {
-        kd = read_value(bytes, p);
+        kd = read_value(bytes, p, depth + 1);
         if kd.ok {
-          vd = read_value(bytes, kd.next);
+          vd = read_value(bytes, kd.next, depth + 1);
           if vd.ok {
             kv = kd.value;
             vv = vd.value;
@@ -297,13 +304,14 @@ fn read_value(bytes: vector<u8>, pos: integer) -> Decoded {
 }
 
 /// Decode canonical CBOR bytes into a `CborValue`.  Returns `ok=false` on any
-/// malformed, non-canonical, or truncated input — and rejects trailing bytes
-/// after the top-level value.  Never crashes.
+/// malformed, non-canonical, or truncated input, on nesting deeper than
+/// `MAX_DEPTH` — and rejects trailing bytes after the top-level value.  Never
+/// crashes.
 // Example: @CBR-003 — `ok=false` is one answer for four different problems, and
 // the surprising one is that well-formed but NON-canonical CBOR is refused.
 // Example: @CBR-004 — a map carrying two entries under one key decodes ok=true.
 pub fn decode(bytes: vector<u8>) -> Decoded {
-  d = read_value(bytes, 0);
+  d = read_value(bytes, 0, 0);
   if d.ok {
     if d.next != len(bytes) { return Decoded { value: CNull, next: d.next, ok: false }; }
   }

@@ -48,8 +48,12 @@ pub fn seal(key_b64: &str, nonce_b64: &str, aad_b64: &str, plaintext_b64: &str) 
     let Some(nonce_bytes) = decode_fixed::<12>(nonce_b64) else {
         return String::new();
     };
-    let aad = crate::base64::decode(aad_b64);
-    let plaintext = crate::base64::decode(plaintext_b64);
+    let (Some(aad), Some(plaintext)) = (
+        crate::base64::try_decode(aad_b64),
+        crate::base64::try_decode(plaintext_b64),
+    ) else {
+        return String::new();
+    };
 
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -81,8 +85,12 @@ pub fn open(key_b64: &str, nonce_b64: &str, aad_b64: &str, ciphertext_b64: &str)
     let Some(nonce_bytes) = decode_fixed::<12>(nonce_b64) else {
         return String::new();
     };
-    let aad = crate::base64::decode(aad_b64);
-    let ct_and_tag = crate::base64::decode(ciphertext_b64);
+    let (Some(aad), Some(ct_and_tag)) = (
+        crate::base64::try_decode(aad_b64),
+        crate::base64::try_decode(ciphertext_b64),
+    ) else {
+        return String::new();
+    };
 
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
     let nonce = Nonce::from_slice(&nonce_bytes);

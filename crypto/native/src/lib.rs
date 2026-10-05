@@ -78,7 +78,11 @@ pub unsafe extern "C" fn n_sha256(data_ptr: *const u8, data_len: usize) -> LoftS
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_sha256_b64(data_ptr: *const u8, data_len: usize) -> LoftStr {
     let b64 = unsafe { std::str::from_utf8(cr_in(data_ptr, data_len)).unwrap_or("") };
-    let bytes = base64::decode(b64);
+    // Input that is not base64 answers "": a digest of the empty input would read as
+    // the hash of what the caller sent.
+    let Some(bytes) = base64::try_decode(b64) else {
+        return cr_ret(String::new());
+    };
     cr_ret(base64::encode(&sha256::sha256(&bytes)))
 }
 
@@ -104,13 +108,14 @@ pub unsafe extern "C" fn n_base64_encode(data_ptr: *const u8, data_len: usize) -
     cr_ret(base64::encode(data))
 }
 
-/// `#native "n_base64_decode"` — decode standard base64 `data` (lossy UTF-8).
+/// `#native "n_base64_decode"` — decode standard base64 `data` to text; "" when `data`
+/// is not base64 or its bytes are not UTF-8 (a lossy decode would answer other text).
 #[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_base64_decode(data_ptr: *const u8, data_len: usize) -> LoftStr {
     let data = unsafe { cr_in(data_ptr, data_len) };
     let raw = base64::decode(std::str::from_utf8(data).unwrap_or(""));
-    cr_ret(String::from_utf8_lossy(&raw).into_owned())
+    cr_ret(String::from_utf8(raw).unwrap_or_default())
 }
 
 /// `#native "n_base64url_encode"` — URL-safe base64 (JWT-style, no padding).
@@ -341,8 +346,8 @@ pub unsafe extern "C" fn n_base64_to_bytes(
 
 /// `#native "n_bytes_concat_b64"` — base64 of `bytes(a) || bytes(b)`.
 ///
-/// Text-in / text-out (no store interaction), so loft assembles labeled byte
-/// strings by repeated concatenation without a store-allocated `vector<u8>`.
+/// Text-in / text-out (no store interaction): loft assembles labeled byte
+/// strings by repeated concatenation in base64.
 #[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_bytes_concat_b64(

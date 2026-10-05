@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Input that is not base64 is refused by every door that takes base64 — "" or false,
+// never a result computed from other bytes than the ones sent.  A lenient decoder read
+// each stray character as `A`: `base64_to_bytes("!!!!")` answered [0,0,0], and a typo in
+// a message signed, hashed and sealed bytes the caller never sent.
+use crypto;
+
+fn main() {
+  bad = "aG k=";
+  key = crypto::random_bytes(32);
+  nonce = crypto::random_bytes(12);
+  seed = crypto::random_bytes(32);
+  pk = crypto::ed25519_public_key(seed);
+
+  assert(len(crypto::base64_to_bytes("!!!!")) == 0, "base64_to_bytes refuses");
+  assert(crypto::base64_decode("!!!") == "", "base64_decode refuses");
+  assert(crypto::base64_decode("/w==") == "", "bytes that are not UTF-8 are no text");
+  assert(crypto::base64_decode("aGk=") == "hi", "valid input still decodes");
+  assert(crypto::sha256_b64(bad) == "", "sha256_b64 refuses rather than hash other bytes");
+  assert(crypto::ed25519_sign(seed, bad) == "", "ed25519_sign refuses the message");
+  good_sig = crypto::ed25519_sign(seed, crypto::base64_encode("m"));
+  assert(!crypto::ed25519_verify(pk, bad, good_sig), "ed25519_verify refuses the message");
+  assert(crypto::aes256gcm_seal(key, nonce, bad, crypto::base64_encode("p")) == "", "seal refuses the aad");
+  assert(crypto::aes256gcm_seal(key, nonce, "", bad) == "", "seal refuses the plaintext");
+  assert(crypto::hkdf_sha256("", bad, "", 32) == "", "hkdf refuses the ikm");
+  assert(crypto::hkdf_sha256("", crypto::base64_encode("ikm"), "", 32) != "", "valid hkdf still answers");
+
+  // The vector base64_to_bytes answers is an ordinary one: appending to it is sound.
+  d = crypto::base64_to_bytes(crypto::base64_encode("ab"));
+  noise = crypto::base64_to_bytes(crypto::random_bytes(16));
+  d += [99 as u8];
+  assert(len(d) == 3 && d[0] == 97 && d[2] == 99 && len(noise) == 16, "append onto a decoded vector");
+  println("malformed base64: refused everywhere");
+}

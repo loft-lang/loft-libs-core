@@ -11,24 +11,23 @@ or the world primitives.  Each subdirectory is an independent
 loft package published to the registry under its own name.
 
 Per the chunked-repo design in
-[loft's lib_plans/12-library-extraction/](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
+[loft's lib_plans/12-library-extraction/](https://github.com/loft-lang/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
 § Chunk grouping.
 
 ## Packages
 
-| Subdir | Package | Latest |
-|---|---|---|
-| [`arguments/`](arguments/) | `arguments` — CLI argument parsing | v0.2.1 |
-| [`cbor/`](cbor/) | `cbor` — canonical CBOR (RFC 8949) encode/decode, pure loft | v0.1.4 |
-| [`crypto/`](crypto/) | `crypto` — SHA-256, HMAC, base64, ES256/JOSE, HKDF, sealed boxes | v0.3.8 |
-| [`random/`](random/) | `random` — PRNGs in two tiers: a shared global generator and owned `RandStream`s | v0.3.1 |
-| [`regex/`](regex/) | `regex` — small-script regex (`matches` / `search` / `split_on`, thread-local cache) | v0.3.0 |
-| [`zttext/`](zttext/) | `zttext` — rich-text engine: piece table, flow/justify/float layout, pagination, bidi selection, hit-testing, RenderSink | v0.1.1 |
+| Subdir | Package |
+|---|---|
+| [`arguments/`](arguments/) | `arguments` — GNU-style command-line argument parsing with generated `--help` |
+| [`cbor/`](cbor/) | `cbor` — canonical CBOR (RFC 8949) encode/decode, pure loft |
+| [`crypto/`](crypto/) | `crypto` — SHA-256/HMAC, base64, Ed25519, ES256, X25519, HKDF, AES-256-GCM, HPKE |
+| [`random/`](random/) | `random` — PRNGs in two tiers: a shared global generator and owned `RandStream`s |
+| [`regex/`](regex/) | `regex` — small-script regex (`matches` / `search` / `split_on`, cached patterns) |
+| [`zttext/`](zttext/) | `zttext` — text engine: piece table, undoable edits, flow/justify/column layout, pagination, bidi, hit-testing |
 
-Future drains from the loft stdlib (Phase 3.6 in
-[plan-12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md#phase-36--stdlib-drain-into-libs))
-may add packages here — `html` for `escape_html` is the most
-likely.
+Each package's version is the `version` in its `loft.toml`; the registry lists every
+published one (`loft api --registry`).  Every package has a guide at
+`docs/01-getting-started.loft`.
 
 ## Installing a package
 
@@ -44,31 +43,12 @@ structure — they install per-package.
 
 Each package versions independently.  Git tags use the
 **`<package>-v<version>`** convention to disambiguate sibling
-packages in this multi-package repo:
+packages in this multi-package repo (`crypto-v0.3.11`).
 
-| Package + version | Git tag |
-|---|---|
-| arguments 0.2.1 | `arguments-v0.2.1` |
-| cbor 0.1.4 | `cbor-v0.1.4` |
-| crypto 0.3.8 | `crypto-v0.3.8` |
-| random 0.3.1 | `random-v0.3.1` |
-| regex 0.3.0 | `regex-v0.3.0` |
-| zttext 0.1.1 | `zttext-v0.1.1` |
-
-A package's release flow (also documented in
-[SUBMITTING.md](https://github.com/loft-lang/registry/blob/main/SUBMITTING.md)
-in the registry repo):
-
-```sh
-cd <package>/
-# bump version in loft.toml
-git tag <package>-v<version>
-git push --tags
-loft package
-gh release create <package>-v<version> <package>-<version>.tar.gz \
-    --title "<package> <version>"
-# Then open a PR against loft-lang/registry adding the version row.
-```
+These packages are published by loft's maintainers through the signed registry
+flow — [LIBRARY_PUBLISH.md](https://github.com/loft-lang/loft/blob/main/doc/claude/LIBRARY_PUBLISH.md)
+in the loft repository.  An outside author publishing a package of their own follows
+[SUBMITTING.md](https://github.com/loft-lang/registry/blob/main/SUBMITTING.md).
 
 ## License
 

@@ -48,7 +48,9 @@ pub fn sign(secret_b64: &str, message_b64: &str) -> String {
         return String::new();
     };
     let sk = SigningKey::from_bytes(&seed);
-    let msg = crate::base64::decode(message_b64);
+    let Some(msg) = crate::base64::try_decode(message_b64) else {
+        return String::new();
+    };
     let sig: Signature = sk.sign(&msg);
     crate::base64::encode(&sig.to_bytes())
 }
@@ -69,7 +71,9 @@ pub fn verify(public_b64: &str, message_b64: &str, signature_b64: &str) -> bool 
         return false;
     };
     let sig = Signature::from_bytes(&sig_bytes);
-    let msg = crate::base64::decode(message_b64);
+    let Some(msg) = crate::base64::try_decode(message_b64) else {
+        return false;
+    };
     pk.verify(&msg, &sig).is_ok()
 }
 

@@ -117,29 +117,27 @@ fn splitting_yields_the_gaps() {
   println("split   : 'a,b;;c' on [,;] gives a, b, '' and c");
 }
 
-// ## The older spellings still work, and say so
+// ## The older spelling still works, and says so
 //
-// An earlier release shipped a pattern-first free function (`regex::find` / `regex::split`)
-// and a prefixed method (`line.regex_find` / `line.regex_split`). Both still work exactly as
-// they did — nothing was removed — and the compiler steers new calls to `search` /
-// `split_on` so the surface converges on one spelling per operation.
+// An earlier release shipped a prefixed method (`line.regex_find` / `line.regex_split`). It
+// still works exactly as it did, and the compiler steers new calls to `search` / `split_on`
+// so the surface converges on one spelling per operation.
 //
-// ⚠ `regex::find` is reachable only when QUALIFIED. A bare `find(pattern, input)` resolves
-// the stdlib's `text` method first and answers a literal search — with the arguments in the
-// other order, which is why it type-checks.
+// ⚠ There is no free `find` / `split` in this library. A bare `find(pattern, input)`
+// resolves the stdlib's `text` method and answers a literal search — with the arguments in
+// the other order, which is why it type-checks.
 //
-// Running this section PRINTS two `advice[superseded-call]` lines, and that is the steering
-// channel working rather than a defect in the guide: the two calls below are deliberately
-// the old spellings, so the compiler names the new one. Your own code sees the same line
-// wherever you write them, which is how the surface converges without anything breaking.
+// Running this section PRINTS an `advice[superseded-call]` line, and that is the steering
+// channel working rather than a defect in the guide: the call below is deliberately the old
+// spelling, so the compiler names the new one. Your own code sees the same line wherever you
+// write it, which is how the surface converges without anything breaking.
 
 fn the_older_spellings_still_work() {
   line = "order 1234";
-  assert(regex::find("[0-9]+", line) == 6, "the qualified free function still answers");
-  assert(line.regex_find("[0-9]+") == 6, "…and so does the prefixed method");
-  assert(line.search("[0-9]+") == 6, "all three are the same operation");
+  assert(line.regex_find("[0-9]+") == 6, "the prefixed method still answers");
+  assert(line.search("[0-9]+") == 6, "and is the same operation as search");
 
-  println("steering: find / regex_find still work, search is the one to write");
+  println("steering: regex_find still works, search is the one to write");
 }
 
 // ## Where to go next
