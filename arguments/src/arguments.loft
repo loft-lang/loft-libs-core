@@ -75,6 +75,12 @@ enum Tok {
 // prefix-consumes from `pos` and advances it (see @PLN35).
 struct Cur { const src: vector<Tok>, pos: integer }
 
+// A command-line parser and, after `parse`, its result.  Declare the options with `flag`,
+// `option`, `required` and `optional` on the value `create` returns, call `parse` on the
+// program's arguments, then read the answers with `has`, `get`, `get_or` and `get_int`, and
+// the words that were not options from `positionals`.  `ok` and `error_msg` report a command
+// line that does not fit the declarations; `help` and `version_text` render the texts the
+// user asked for with `--help` and `--version`.
 pub struct Args {
   const name: text,
   const version: text,
