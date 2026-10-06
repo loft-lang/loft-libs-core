@@ -1,6 +1,6 @@
 [package]
 name = "random"
-version = "0.3.5"
+version = "0.3.6"
 loft = ">=2026.10.0"
 
 api_compatible_with  = "0.3.0"   # oldest own release this is a drop-in for

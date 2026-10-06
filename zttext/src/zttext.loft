@@ -28,13 +28,13 @@ pub fn zttext_version() -> text { return "0.1.3"; }
 // A piece p = ⟨o, ℓ, s⟩ references the buffer span B[start, start+count) with style-id
 // `style`. Pieces are immutable value objects: an edit REBUILDS the piece sequence, it
 // never mutates a piece or swaps vector slots in place.
-pub struct Piece { start: integer, count: integer, style: integer }
+pub struct Piece { pub start: integer, pub count: integer, pub style: integer }
 
 // The content model. `buf` is the append-only buffer B ∈ Σ* (a vector<character>, so
 // offsets are characters); `pieces` is the piece sequence D = ⟨p₁…pₙ⟩. The materialised
 // text ⌊D⌋ is the concatenation of each piece's buffer span. (Bundling B with D keeps the
 // engine's surface small; the buffer is treated as append-only within an edit.)
-pub struct Doc { buf: vector<character>, pieces: vector<Piece> }
+pub struct Doc { pub buf: vector<character>, pub pieces: vector<Piece> }
 
 // A styled run: a maximal same-style character span. `slice_runs` returns these; they are
 // what an inverse Ins/Sty re-creates so undo restores styles, not just text.
@@ -247,7 +247,7 @@ pub enum Op {
 }
 
 // A transaction τ — an atomic, ordered composition of primitive ops; the unit of undo.
-pub struct Txn { ops: vector<Op> }
+pub struct Txn { pub ops: vector<Op> }
 
 // Bundle ops into ONE transaction — the unit of undo.  Grouping them here is
 // what makes a compound edit undo in a single step rather than in pieces.
@@ -331,7 +331,7 @@ pub fn invert(d: Doc, t: Txn) -> Txn {
 // advance) matters; `weight`/`italic`/`dir` (0 = LTR, 1 = RTL) round out the shape the
 // real backends will fill in. Layout reads styles ONLY through a StyleResolver, so a
 // surface restyles by swapping the resolver.
-pub struct Style { size: float, weight: integer, italic: boolean, dir: integer }
+pub struct Style { pub size: float, pub weight: integer, pub italic: boolean, pub dir: integer }
 
 // Size 1, regular, upright, left-to-right — the style a document starts in and
 // the one to adjust from rather than building a `Style` field by field.
@@ -360,29 +360,29 @@ pub fn run_height(st: Style) -> float { return st.size; }
 // carries the LOGICAL content-ref κ = [ks, ke) (character span in ⌊D⌋) and a single style.
 // The rect's position is the VISUAL order; κ is the LOGICAL order — both explicit in every
 // box, which is the whole BiDi story (a selection is κ-intersection, geometry-free).
-pub struct Rect { x: float, y: float, w: float, h: float }
+pub struct Rect { pub x: float, pub y: float, pub w: float, pub h: float }
 // `hyphen` marks a synthetic line-end hyphen glyph (from a discretionary break, S4.7):
 // it renders "-" rather than its κ text, and κ points at the soft-hyphen it stands in for.
-pub struct Box  { rect: Rect, ks: integer, ke: integer, style: integer, hyphen: boolean = false }
+pub struct Box  { pub rect: Rect, pub ks: integer, pub ke: integer, pub style: integer, pub hyphen: boolean = false }
 // The boxes of a laid-out text: one `Box` per glyph run, in layout order.  What `flow_layout`
 // returns.
-pub struct BoxSet { boxes: vector<Box> }
+pub struct BoxSet { pub boxes: vector<Box> }
 
 // A laid-out visual line: the logical char span [cs,ce) its boxes cover, its top y and its
 // height. `para_end` is true when this is a paragraph's LAST line (ended at a hard break or
 // the doc end) — it is left ragged (justify skips it). `right` is the line's available right
 // edge (the column edge, or an image's edge for a line beside one) — the target justify fills
 // to. Carried by a Layout so incremental reflow can find the lines an edit touches (M3).
-pub struct LaidLine { cs: integer, ce: integer, y: float, h: float, para_end: boolean = false, right: float = 0.0 }
+pub struct LaidLine { pub cs: integer, pub ce: integer, pub y: float, pub h: float, pub para_end: boolean = false, pub right: float = 0.0 }
 
 // A placed image on the page: its rectangle + the image reference `id` (a file_record id at
 // the app layer). It is BOTH a rendered element AND an exclusion region the text steers around.
-pub struct PlacedImage { x: float, y: float, w: float, h: float, id: integer }
+pub struct PlacedImage { pub x: float, pub y: float, pub w: float, pub h: float, pub id: integer }
 
 // A full layout result: the text boxes (the render IR), per-line metadata (the seam
 // incremental reflow needs), and the placed images (rendered separately; text never overlaps
 // them). `flow_layout` returns just the BoxSet; `flow_layout_full` returns this.
-pub struct Layout { boxes: vector<Box>, lines: vector<LaidLine>, images: vector<PlacedImage> }
+pub struct Layout { pub boxes: vector<Box>, pub lines: vector<LaidLine>, pub images: vector<PlacedImage> }
 
 // -------------------- S1.2 segmentation into words and glue --------------------
 
@@ -391,7 +391,7 @@ pub struct Layout { boxes: vector<Box>, lines: vector<LaidLine>, images: vector<
 // are the kind flags; all false → glue. Glue is the breakable inter-word space; disc is a
 // zero-width in-WORD break (S4.7); brk is a HARD break that ends the line and starts a new
 // paragraph (a paragraph's last line is ragged, and gets paragraph spacing after it).
-pub struct Token { word: boolean, ts: integer, te: integer, disc: boolean = false, brk: boolean = false }
+pub struct Token { pub word: boolean, pub ts: integer, pub te: integer, pub disc: boolean = false, pub brk: boolean = false }
 
 fn is_space(c: character) -> boolean { return c == ' '; }
 fn is_nl(c: character) -> boolean { return (c as integer) == 10; }   // '\n' — a paragraph break
@@ -486,7 +486,7 @@ pub fn token_width(d: Doc, tok: Token, resolve: fn(integer) -> Style, measure: f
 
 // A laid-out line: the half-open token range [first, last_excl). Trailing glue at a break
 // is NOT included (notation §6: "trailing glue on a line is dropped").
-pub struct Line { first: integer, last_excl: integer }
+pub struct Line { pub first: integer, pub last_excl: integer }
 
 // greedy line breaking (notation §6, brk): pack words while they fit in width W; interior
 // glue counts toward the width, trailing glue is deferred and dropped at a break. The first
@@ -970,7 +970,7 @@ pub fn dirty(old_d: Doc, new_d: Doc) -> (integer, integer, integer) {
 // The result of an incremental relayout: the new Layout, plus how many boxes were RECOMPUTED
 // (the tail) vs REUSED from the old layout (the prefix). The counts are the bounded-work
 // evidence M5 asserts; the layout is what M3's differential checks against a full relayout.
-pub struct PatchResult { layout: Layout, recomputed: integer, reused: integer }
+pub struct PatchResult { pub layout: Layout, pub recomputed: integer, pub reused: integer }
 
 fn full_patch(new_d: Doc, resolve: fn(integer) -> Style, measure: fn(text, Style) -> float, w_col: float) -> PatchResult {
   fl = flow_layout_full(new_d, resolve, measure, w_col);
@@ -1121,7 +1121,7 @@ pub fn map_anchor_txn(a: integer, t: Txn) -> integer {
 
 // A page: the line range [first_line, last_excl) it holds, plus the char and y at which it
 // starts (its π entry — enough to lay the page out from scratch without the pages before it).
-pub struct Page { first_line: integer, last_excl: integer, first_char: integer, top_y: float }
+pub struct Page { pub first_line: integer, pub last_excl: integer, pub first_char: integer, pub top_y: float }
 
 // paginate a laid-out column: lines stack onto a page until the next line would exceed
 // page_h, then a new page begins. The first line of a page always fits (even if taller than
@@ -1349,10 +1349,10 @@ pub fn compact_step(d: Doc, budget: integer) -> Doc {
 // Page geometry: the physical page, its margins, and its column grid. Column width is
 // derived so `columns` equal columns plus `gutter` gaps exactly fill the content box.
 pub struct PageGeom {
-  width: float, height: float,
-  margin_left: float, margin_right: float, margin_top: float, margin_bottom: float,
-  columns: integer, gutter: float,
-  para_gap: float = 0.0,   // extra vertical space after each paragraph
+  pub width: float, pub height: float,
+  pub margin_left: float, pub margin_right: float, pub margin_top: float, pub margin_bottom: float,
+  pub columns: integer, pub gutter: float,
+  pub para_gap: float = 0.0,   // extra vertical space after each paragraph
 }
 
 // the width of one column: (content width − the inter-column gutters) / columns.
@@ -1420,7 +1420,7 @@ pub fn layout_columns(d: Doc, g: PageGeom, resolve: fn(integer) -> Style, measur
 // An in-text (flow) image anchored at content char `at`, with a placement mode and size.
 // mode: IMG_LEFT → float left, text wraps right; IMG_FULL → full-width block, text below;
 // IMG_RIGHT → float right, text wraps left. Placed at the flow position when reached.
-pub struct FlowImage { at: integer, mode: integer, w: float, h: float, id: integer }
+pub struct FlowImage { pub at: integer, pub mode: integer, pub w: float, pub h: float, pub id: integer }
 // `FlowImage.mode`: float left, text wraps on the right.
 pub const IMG_LEFT = 0;
 // `FlowImage.mode`: a full-width block, text resumes below it.
