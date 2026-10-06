@@ -82,9 +82,9 @@ struct Cur { const src: vector<Tok>, pos: integer }
 // line that does not fit the declarations; `help` and `version_text` render the texts the
 // user asked for with `--help` and `--version`.
 pub struct Args {
-  const name: text,
-  const version: text,
-  const description: text,
+  pub const name: text,
+  pub const version: text,
+  pub const description: text,
   // Positional synopsis shown after `[OPTION...]` on the usage line, e.g. "[FILE...]".
   usage: text,
   // "Report bugs to <…>." footer, when set.
@@ -94,7 +94,7 @@ pub struct Args {
   const options: vector<Arg>,
   // Parallel to `options`: each option's resolved value, or null when unset.
   const results: vector<text?>,
-  positionals: vector<text>,
+  pub positionals: vector<text>,
   help_enabled: boolean,
   help_idx: integer,
   version_idx: integer,

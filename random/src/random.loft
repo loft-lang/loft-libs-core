@@ -53,8 +53,8 @@ pub fn rand_indices(n: integer) -> vector<integer>;
 // and draw from it with its methods, so its sequence does not depend on any other draw in the
 // program.
 pub struct RandStream {
-  s1: integer,   // Lehmer state A in [1, 2147483562]
-  s2: integer,   // Lehmer state B in [1, 2147483398]
+  pub s1: integer,   // Lehmer state A in [1, 2147483562]
+  pub s2: integer,   // Lehmer state B in [1, 2147483398]
 }
 
 // Seed an independent stream. Any integer seed is valid (negative and zero included);

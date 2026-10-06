@@ -35,8 +35,8 @@ pub enum CborValue {
 
 /// One key/value pair of a `CMap`.
 pub struct CborEntry {
-  const key: CborValue,
-  const value: CborValue,
+  pub const key: CborValue,
+  pub const value: CborValue,
 }
 
 // Canonical head: the major type (0..7) plus the SHORTEST-form encoding of
@@ -189,9 +189,9 @@ pub fn encode(v: CborValue) -> vector<u8> {
 /// truncated input, and on nesting deeper than `MAX_DEPTH`.  Decoding never
 /// crashes (loft-safe): a bad byte stream yields ok=false rather than a trap.
 pub struct Decoded {
-  const value: CborValue,
-  const next:  integer,
-  const ok:    boolean,
+  pub const value: CborValue,
+  pub const next:  integer,
+  pub const ok:    boolean,
 }
 
 /// How deep arrays and maps may nest in bytes `decode` accepts — a value inside
