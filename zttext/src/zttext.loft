@@ -241,9 +241,9 @@ pub fn char_styles(d: Doc) -> vector<integer> {
 
 // The primitive edit operations (notation §8): ins(a,t,σ) · del(a,b) · sty(a,b,σ).
 pub enum Op {
-  Ins { at: integer, str: text, style: integer },
-  Del { from: integer, to: integer },
-  Sty { from: integer, to: integer, style: integer },
+  Ins { pub at: integer, pub str: text, pub style: integer },
+  Del { pub from: integer, pub to: integer },
+  Sty { pub from: integer, pub to: integer, pub style: integer },
 }
 
 // A transaction τ — an atomic, ordered composition of primitive ops; the unit of undo.
