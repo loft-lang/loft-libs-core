@@ -25,12 +25,12 @@
 // two payload bytes are a different record as `CBytes` than as `CText`.
 pub enum CborValue {
   CNull,
-  CBool  { value: boolean },
-  CInt   { value: integer },   // >=0 -> major 0 (uint); <0 -> major 1 (negint)
-  CBytes { value: vector<u8> },
-  CText  { value: text },
-  CArray { items: vector<CborValue> },
-  CMap   { entries: vector<CborEntry> },
+  CBool  { pub value: boolean },
+  CInt   { pub value: integer },   // >=0 -> major 0 (uint); <0 -> major 1 (negint)
+  CBytes { pub value: vector<u8> },
+  CText  { pub value: text },
+  CArray { pub items: vector<CborValue> },
+  CMap   { pub entries: vector<CborEntry> },
 }
 
 /// One key/value pair of a `CMap`.
