@@ -1,0 +1,95 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+// What a script reaches for and the standard library does not carry, because each is loft
+// over primitives the runtime already answers (`files`, `is_symlink`, `read_bytes`,
+// `write_bytes`): the recursive walk every port wrote by hand, the copy that was two calls
+// and a null discharge, the glob that was a listing and a filter.  Each hangs off `text` so
+// it fires as a trigger: a script writes `dir.walk(".loft")` and names no library.
+
+/// Every file under the directory `self`, in every subdirectory, as paths joined with `/`
+/// below `self`, in path order.  A symbolic link is never followed, so a loop in the tree is
+/// not a loop here.  `suffix` keeps only the names that end with it (`".loft"`); `""` keeps
+/// every file.  A path that is not a directory answers no files.
+pub fn walk(self: text, suffix: text = "") -> vector<text> {
+  found: vector<text> = [];
+  if !is_dir(self) { return found; }
+  found = walk_into(self, suffix, found);
+  sort(found);
+  found
+}
+
+fn walk_into(dir: text, suffix: text, out: vector<text>) -> vector<text> {
+  result = out;
+  for f in file(dir).files() {
+    if is_symlink(f.path) { continue; }
+    if f.format == Format.Directory {
+      result = walk_into(f.path, suffix, result);
+    } else if suffix == "" || f.path.ends_with(suffix) {
+      result += [f.path];
+    }
+  }
+  result
+}
+
+/// Copy the file at `self` to `dst`, bytes as they are: true when `dst` now holds them.  A
+/// source that cannot be read writes nothing and answers false, as does a write that fails.
+pub fn copy_to(self: text, dst: text) -> boolean {
+  bytes = read_bytes(self);
+  if bytes == null { return false; }
+  write_bytes(dst, bytes ?? [])
+}
+
+/// The paths that match the pattern `self`, in name order: `*` stands for any run of
+/// characters inside one name, `?` for one character, and everything before the last `/` is
+/// a directory taken as written (`"default/*.loft"`, `"out/??.txt"`).  A pattern without a
+/// `/` is matched against the current directory.  An absent directory answers no paths.
+pub fn glob(self: text) -> vector<text> {
+  dir = ".";
+  pattern = self;
+  cut = -1;
+  for c in self { if c == '/' { cut = c#index; } }
+  if cut >= 0 {
+    dir = self[0..cut];
+    pattern = self[cut + 1..];
+    if dir == "" { dir = "/"; }
+  }
+  found: vector<text> = [];
+  if !is_dir(dir) { return found; }
+  for name in list_dir(dir) ?? [] {
+    if glob_match(pattern, name) {
+      if dir == "." && cut < 0 { found += [name]; }
+      else if dir == "/" { found += ["/{name}"]; }
+      else { found += ["{dir}/{name}"]; }
+    }
+  }
+  sort(found);
+  found
+}
+
+/// Does `name` match `pattern`, with `*` any run and `?` one character?  A plain character
+/// matches itself only.
+pub fn glob_match(pattern: text, name: text) -> boolean {
+  pc: vector<character> = [];
+  for c in pattern { pc += [c]; }
+  nc: vector<character> = [];
+  for c in name { nc += [c]; }
+  glob_at(pc, 0, nc, 0)
+}
+
+fn glob_at(p: vector<character>, pi: integer, n: vector<character>, ni: integer) -> boolean {
+  if pi == len(p) { return ni == len(n); }
+  c = p[pi];
+  if c == '*' {
+    // The star takes zero or more characters: try every length until one matches.
+    k = ni;
+    while k <= len(n) {
+      if glob_at(p, pi + 1, n, k) { return true; }
+      k += 1;
+    }
+    return false;
+  }
+  if ni == len(n) { return false; }
+  if c == '?' || c == n[ni] { return glob_at(p, pi + 1, n, ni + 1); }
+  false
+}
