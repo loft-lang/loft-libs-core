@@ -9,6 +9,7 @@
 name    = "script"
 version = "0.1.0"
 loft    = ">=2026.10.0"
+repository = "loft-libs-core"
 
 api_compatible_with  = "0.1.0"
 data_compatible_with = "0.1.0"
