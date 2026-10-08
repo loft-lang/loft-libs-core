@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The three helpers on a tree built here: a walk that takes every file below a directory
+// and never follows a link, a copy that moves bytes as they are, a glob over one directory.
+// Every expected value by hand.
+use script::*;
+
+fn root() -> text { "{temp_dir()}/loft-script-lib-{now()}" }
+
+fn build(r: text) {
+  mkdir_all("{r}/a/b");
+  mkdir_all("{r}/c");
+  file("{r}/one.loft").write("fn main() {{}}\n");
+  file("{r}/a/two.loft").write("// two\n");
+  file("{r}/a/b/three.txt").write("three");
+  file("{r}/a/b/four.loft").write("");
+  file("{r}/c/five.md").write("# five\n");
+}
+
+fn test_walk_takes_every_file_below_in_path_order() {
+  r = root();
+  build(r);
+  all = r.walk();
+  assert(len(all) == 5, "five files: {all}");
+  assert(all[0] == "{r}/a/b/four.loft" && all[4] == "{r}/one.loft", "path order: {all}");
+  lofts = r.walk(".loft");
+  assert(lofts == ["{r}/a/b/four.loft", "{r}/a/two.loft", "{r}/one.loft"], "by suffix: {lofts}");
+  assert(len("{r}/c".walk()) == 1, "a subdirectory alone");
+  assert(len("{r}/one.loft".walk()) == 0, "a file is not a directory");
+  assert(len("{r}/absent".walk()) == 0, "an absent directory");
+}
+
+fn test_copy_to_moves_the_bytes_as_they_are() {
+  r = root();
+  build(r);
+  assert("{r}/c/five.md".copy_to("{r}/five-copy.md"), "copied");
+  assert(file("{r}/five-copy.md").content() == "# five\n", "same bytes");
+  assert(!"{r}/absent.md".copy_to("{r}/never.md"), "no source, no copy");
+  assert(!is_file("{r}/never.md"), "nothing written for an absent source");
+}
+
+fn test_glob_matches_one_directory() {
+  r = root();
+  build(r);
+  assert("{r}/a/*.loft".glob() == ["{r}/a/two.loft"], "star with a suffix");
+  assert("{r}/a/b/*".glob() == ["{r}/a/b/four.loft", "{r}/a/b/three.txt"], "star alone, name order");
+  assert("{r}/a/b/f???.loft".glob() == ["{r}/a/b/four.loft"], "one ? per character");
+  assert(len("{r}/a/b/*.md".glob()) == 0, "no match");
+  assert(len("{r}/nowhere/*".glob()) == 0, "absent directory");
+  assert(glob_match("*.loft", "x.loft") && !glob_match("*.loft", "x.loft.bak"), "the star ends where the pattern does");
+  assert(glob_match("a*b*c", "abc") && glob_match("a*b*c", "axxbyyc") && !glob_match("a*b*c", "ac"), "several stars");
+  assert(glob_match("", "") && !glob_match("", "a") && !glob_match("?", ""), "the empty cases");
+}
+
+fn main() {
+  test_walk_takes_every_file_below_in_path_order();
+  test_copy_to_moves_the_bytes_as_they_are();
+  test_glob_matches_one_directory();
+  println("ok");
+}
