@@ -19,4 +19,4 @@ jobs:
       contents: read
       pull-requests: read
     with:
-      packages: '["arguments", "cbor", "crypto", "random", "regex", "zttext"]'
+      packages: '["arguments", "cbor", "crypto", "random", "regex", "script", "zttext"]'
