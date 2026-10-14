@@ -1,10 +1,11 @@
 [package]
 name = "regex"
-version = "0.4.3"
+version = "0.5.0"
 loft = ">=2026.10.0"
-description = "Small-script regex: `search`, `matches` and a lazy `split_on`, with a thread-local pattern cache."
+description = "Small-script regex: `search`, `matches`, `capture` / `capture_all` with groups, `replace_on` and a lazy `split_on`, with a thread-local pattern cache."
 
-api_compatible_with  = "0.4.0"   # oldest own release this is a drop-in for
+api_compatible_with  = "0.5.0"   # oldest own release this is a drop-in for: `search` is
+                                 # `integer?` and the superseded `regex_*` spellings are gone
 data_compatible_with = "0.2.1"   # oldest own release whose stored data this reads
 [library]
 entry = "src/regex.loft"
