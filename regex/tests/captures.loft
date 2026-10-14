@@ -1,0 +1,188 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN192 — `capture`, `capture_all`, `group`, `named`, `replace_on`, and `split_on`
+// searched from a position.  Every cell hand-computes its value; the interpreter and
+// `--native` must agree on all of them.  The axes: the subject (ASCII, multibyte before
+// and inside the match, empty, a match at byte 0 and at the end, an empty match), the
+// pattern (no group, one, an optional group that did not take part, nested, alternation,
+// a named group, `(?i)`, `\p{L}`, `^` and `\b` against a second match, a broken one),
+// the count (0, 1, many), and `replace_on`'s limit (0, 1, more than the matches).
+//
+// A cell that asserts a HIT discharges the `Match?` with `?? panic(…)`, so every later
+// read is on a non-null `Match`; `group` and `named` take the nullable receiver, so the
+// chained spelling `line.capture(p).group(1)` is exercised as well.
+use regex::*;
+
+fn main() {
+  test_capture_groups();
+  test_capture_misses();
+  test_capture_all();
+  test_code_points();
+  test_named_groups();
+  test_replace_on();
+  test_split_on_keeps_the_context();
+}
+
+// --- capture: the first match with its groups ---
+
+fn test_capture_groups() {
+  m = "key=value".capture("^(\\w+)=(.+)$") ?? panic("the line matches");
+  assert(m.text == "key=value" and m.start == 0 and m.end == 9, "the whole match is group 0: {m.text} {m.start}..{m.end}");
+  assert(len(m.groups) == 2, "two groups, got {len(m.groups)}");
+  assert(m.group(0) == "key=value", "group(0) is the whole match");
+  assert(m.group(1) == "key" and m.group(2) == "value", "the two groups: {m.group(1)} {m.group(2)}");
+  assert(m.groups[0].start == 0 and m.groups[0].end == 3, "group 1 spans 0..3");
+  assert(m.groups[1].start == 4 and m.groups[1].end == 9, "group 2 spans 4..9");
+  assert(m.group(3) == null and m.group(-1) == null, "no such group is null");
+
+  // the chained spelling: a miss answers null all the way down
+  assert("key=value".capture("^(\\w+)=(.+)$").group(1) == "key", "chained: the group of a hit");
+  assert("nothing".capture("^(\\w+)=(.+)$").group(1) == null, "chained: the group of a miss is null");
+
+  // no group at all: a Match with an empty groups vector
+  n = "order 1234".capture("[0-9]+") ?? panic("digits present");
+  assert(n.text == "1234" and n.start == 6 and n.end == 10, "no-group pattern: {n.text}");
+  assert(len(n.groups) == 0 and n.group(1) == null, "and no groups");
+
+  // nested groups, in pattern order
+  o = "2026-10-14".capture("((\\d+)-(\\d+))-(\\d+)") ?? panic("a date");
+  assert(o.group(1) == "2026-10" and o.group(2) == "2026" and o.group(3) == "10" and o.group(4) == "14",
+         "nested groups in pattern order: {o.group(1)} {o.group(2)} {o.group(3)} {o.group(4)}");
+
+  // alternation: the branch not taken is a group that did not take part
+  p = "cat".capture("(dog)|(cat)") ?? panic("cat");
+  assert(p.group(1) == null and p.group(2) == "cat", "the untaken branch is null");
+  assert(p.groups[0].start == -1 and p.groups[0].end == -1, "and its span is -1, -1");
+
+  // an optional group that matched nothing is null, not ""
+  q = "ab".capture("a(x)?b") ?? panic("ab");
+  assert(q.text == "ab" and q.group(1) == null, "an optional group that did not take part is null");
+
+  // a match at the end, and an empty match
+  r = "hello!".capture("!$") ?? panic("the bang");
+  assert(r.start == 5 and r.end == 6, "a match at the end: {r.start}..{r.end}");
+  s = "b".capture("a*") ?? panic("a* matches empty");
+  assert(s.text == "" and s.start == 0 and s.end == 0, "an empty match at 0");
+}
+
+fn test_capture_misses() {
+  assert("abc".capture("[0-9]+") == null, "no digits: null");
+  assert("".capture("x") == null, "an empty subject: null");
+  assert("abc".capture("[") == null, "a broken pattern: null (and one warning, @RGX-003)");
+}
+
+// --- capture_all: every non-overlapping match ---
+
+fn test_capture_all() {
+  all = "a1 b22 c333".capture_all("([a-z])([0-9]+)");
+  assert(len(all) == 3, "three matches, got {len(all)}");
+  assert(all[0].text == "a1" and all[1].text == "b22" and all[2].text == "c333", "in order");
+  assert(all[2].group(2) == "333" and all[2].start == 7 and all[2].end == 11, "the last one's group and span");
+
+  none = "abc".capture_all("[0-9]");
+  assert(len(none) == 0, "no match: an empty vector");
+
+  one = "x9".capture_all("[0-9]");
+  assert(len(one) == 1 and one[0].start == 1, "one match");
+
+  // non-overlapping: `aa` on `aaa` is one match
+  aa = "aaa".capture_all("aa");
+  assert(len(aa) == 1 and aa[0].end == 2, "non-overlapping");
+
+  // an empty match advances one character
+  star = "baa".capture_all("a*");
+  assert(len(star) == 3, "a* on baa: three matches, got {len(star)}");
+  assert(star[0].text == "" and star[1].text == "aa" and star[2].text == "", "empty, aa, empty");
+
+  // the walk idiom (@RGX-007): a callback replace, nothing copied twice
+  s = "one two three";
+  out = "";
+  last = 0;
+  for m in s.capture_all("\\b[a-z]+\\b") {
+    out += s[last..m.start] + m.text.to_uppercase();
+    last = m.end;
+  }
+  out += s[last..];
+  assert(out == "ONE TWO THREE", "the walk idiom upper-cased every word: {out}");
+}
+
+// --- code points: offsets are bytes on code-point boundaries ---
+
+fn test_code_points() {
+  t = "héllo wörld";
+  m = t.capture("w.r") ?? panic("wör");
+  assert(m.start == 7 and m.end == 11, "the byte span of wör is 7..11, got {m.start}..{m.end}");
+  assert(m.text == "wör", "and the text is the three characters");
+  assert(t[m.start..m.end] == m.text, "slicing the subject with the span gives the same text");
+  assert(size(m.text) == 4 and len(m.text) == 3, "four bytes, three characters");
+
+  e = "😀x".capture(".") ?? panic("a dot");
+  assert(e.start == 0 and e.end == 4 and e.text == "😀", "a dot is one code point of four bytes");
+
+  w = "café au lait".capture("\\w+") ?? panic("a word");
+  assert(w.text == "café", "\\w is Unicode: é is a word character");
+  l = "123 ünï".capture("\\p{{L}}+") ?? panic("letters");
+  assert(l.text == "ünï", "\\p{{L}} takes the letters");
+  i = "HeLLo".capture("(?i)hello") ?? panic("case-folded");
+  assert(i.text == "HeLLo", "(?i) folds case");
+
+  // no normalisation: a precomposed é and e + U+0301 are different texts
+  composed = "é";
+  decomposed = "e\u{0301}";
+  assert(len(composed) == 1 and len(decomposed) == 2, "one and two code points");
+  assert(composed.matches("^.$") and !decomposed.matches("^.$"), "the engine does not normalise");
+
+  // a pattern that could match inside a code point does not compile
+  assert("abc".capture("(?-u:\\xFF)") == null, "a byte pattern over text is refused");
+}
+
+// --- named groups ---
+
+fn test_named_groups() {
+  h = "HTTP/1.1 200".capture("HTTP/(?<maj>\\d)\\.(?<min>\\d)") ?? panic("the header matches");
+  assert(h.named("maj") == "1" and h.named("min") == "1", "named groups: {h.named(\"maj\")}.{h.named(\"min\")}");
+  assert(h.group(1) == "1" and h.group(2) == "1", "and by position");
+  assert(h.named("patch") == null, "an unknown name is null");
+  assert(len(h.names) == 2 and h.names[0] == "maj" and h.names[1] == "min", "names in pattern order");
+  assert("nope".capture("HTTP/(?<maj>\\d)").named("maj") == null, "chained: a miss is null");
+
+  mixed = "a-b".capture("(?<first>[a-z])-([a-z])") ?? panic("a-b");
+  assert(mixed.names[0] == "first" and mixed.names[1] == "", "an unnamed group has the empty name");
+  assert(mixed.named("") == null, "and the empty name finds nothing");
+
+  plain = "ab".capture("(a)(b)") ?? panic("ab");
+  assert(len(plain.names) == 2 and plain.named("a") == null, "no names: two empty entries");
+}
+
+// --- replace_on ---
+
+fn test_replace_on() {
+  assert("a1b22c333".replace_on("[0-9]+", "#") == "a#b#c#", "every match replaced");
+  assert("a1b22c333".replace_on("[0-9]+", "#", 1) == "a#b22c333", "limit 1: the first only");
+  assert("a1b22c333".replace_on("[0-9]+", "#", 2) == "a#b#c333", "limit 2");
+  assert("a1b22c333".replace_on("[0-9]+", "#", 9) == "a#b#c#", "a limit past the matches is every match");
+  assert("key=value".replace_on("(\\w+)=(\\w+)", "$2=$1") == "value=key", "positional groups in the template");
+  assert("2026-10-14".replace_on("(?<y>\\d+)-(?<m>\\d+)-(?<d>\\d+)", "${{d}}/${{m}}/${{y}}") == "14/10/2026", "named groups in the template");
+  assert("cost 5".replace_on("[0-9]+", "$$$0") == "cost $5", "$$ is a dollar, $0 the whole match");
+  assert("abc".replace_on("[0-9]", "#") == "abc", "no match: unchanged");
+  assert("abc".replace_on("[", "#") == "abc", "a broken pattern: unchanged");
+  assert("héllo".replace_on("é", "e") == "hello", "a multibyte match replaced");
+  assert("a b".replace_on(" ", "{{") == "a{{b", "a template is not a format string (@RGX-008)");
+}
+
+// --- split_on searched from a position: ^ and \b keep the whole subject as context ---
+
+fn test_split_on_keeps_the_context() {
+  assert(pieces("abab", "^ab") == "[][ab]", "^ matches once: {pieces(\"abab\", \"^ab\")}");
+  assert(pieces("abab", "\\bab") == "[][ab]", "\\b is not a boundary inside abab: {pieces(\"abab\", \"\\\\bab\")}");
+  assert(pieces("a,b;;c", "[,;]") == "[a][b][][c]", "the gaps, the empty one included");
+  assert(pieces("abc", "[0-9]") == "[abc]", "no match: one piece");
+  assert(pieces("", ",") == "[]", "empty input: one empty piece");
+  assert(pieces("héllo wörld", " ") == "[héllo][wörld]", "multibyte pieces");
+}
+
+fn pieces(input: text, pattern: text) -> text {
+  out = "";
+  for p in input.split_on(pattern) { out = "{out}[{p}]"; }
+  out
+}

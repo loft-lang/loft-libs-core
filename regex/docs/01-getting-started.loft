@@ -1,15 +1,16 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Getting Started
-// @TITLE: Three verbs over a text — and the pattern that fails without saying so.
+// @TITLE: Six verbs over a text — and the pattern that fails by saying so once.
 //
-// `regex` gives a `text` three methods: `search` for where a pattern first matches,
-// `matches` for whether it matches at all, and `split_on` for the pieces between matches.
-// Patterns are written inline and cached, so calling the same one in a loop is cheap.
+// `regex` gives a `text` six methods: `search` for where a pattern first matches,
+// `matches` for whether it matches at all, `capture` and `capture_all` for a match with
+// its groups, `replace_on` for the text with its matches replaced, and `split_on` for the
+// pieces between matches.  Patterns are written inline and cached, so calling the same
+// one in a loop is cheap.
 //
 // It is deliberately the SMALL-SCRIPT tool — log scanning, CLI fields, quick extraction —
-// and not a parser. Grammars, ASTs and recursion are somebody else's job, and there is no
-// `replace` or capture-group accessor yet.
+// and not a parser. Grammars, ASTs and recursion are somebody else's job.
 //
 // ⚠ **The verbs are named around the stdlib, not after the usual regex words**, and that is
 // the first thing to know. `text` already has `find` (a LITERAL substring search) and
@@ -36,7 +37,8 @@ fn main() {
   a_pattern_that_never_compiled();
   the_offset_is_a_byte();
   splitting_yields_the_gaps();
-  the_older_spellings_still_work();
+  pulling_a_value_out_of_a_match();
+  replacing_and_the_walk_idiom();
 }
 
 // That prints:
@@ -117,34 +119,62 @@ fn splitting_yields_the_gaps() {
   println("split   : 'a,b;;c' on [,;] gives a, b, '' and c");
 }
 
-// ## The older spelling still works, and says so
+// ## Pulling a value out of a match
 //
-// An earlier release shipped a prefixed method (`line.regex_find` / `line.regex_split`). It
-// still works exactly as it did, and the compiler steers new calls to `search` / `split_on`
-// so the surface converges on one spelling per operation.
+// `capture` answers the first match with its capture groups, or null. `m.group(1)` is the
+// first group's text — null when that group did not take part, which is how an optional
+// group or an alternation branch not taken reads. `m.text`, `m.start` and `m.end` are the
+// whole match and its byte span; `m.named("…")` reads a `(?<name>…)` group.
 //
-// ⚠ There is no free `find` / `split` in this library. A bare `find(pattern, input)`
-// resolves the stdlib's `text` method and answers a literal search — with the arguments in
-// the other order, which is why it type-checks.
-//
-// Running this section PRINTS an `advice[superseded-call]` line, and that is the steering
-// channel working rather than a defect in the guide: the call below is deliberately the old
-// spelling, so the compiler names the new one. Your own code sees the same line wherever you
-// write it, which is how the surface converges without anything breaking.
+// Nothing in a `Match` is a copy of the subject: its texts are slices of it, and on
+// `--native` the compiler keeps them views where it can prove the subject outlives them.
 
-fn the_older_spellings_still_work() {
-  line = "order 1234";
-  assert(line.regex_find("[0-9]+") == 6, "the prefixed method still answers");
-  assert(line.search("[0-9]+") == 6, "and is the same operation as search");
+fn pulling_a_value_out_of_a_match() {
+  line = "user=ada  shell=/bin/sh";
+  m = line.capture("(\\w+)=(\\S+)");
+  assert(m != null, "the line has a key=value pair");
+  assert(m.group(1) == "user" and m.group(2) == "ada", "the first pair, by group number");
+  assert(m.text == "user=ada" and m.start == 0 and m.end == 8, "the whole match and its byte span");
 
-  println("steering: regex_find still works, search is the one to write");
+  pairs = line.capture_all("(?<key>\\w+)=(?<val>\\S+)");
+  assert(len(pairs) == 2, "two pairs on the line, got {len(pairs)}");
+  assert(pairs[1].named("key") == "shell" and pairs[1].named("val") == "/bin/sh", "the second, by name");
+
+  opt = "ab".capture("a(x)?b");
+  assert(opt != null and opt.group(1) == null, "an optional group that matched nothing is null, not \"\"");
+
+  println("capture : {m.group(1)} is {m.group(2)}; {len(pairs)} pairs by name");
+}
+
+// ## Replacing — a template, or a walk
+//
+// `replace_on` replaces every match (or the first `limit` of them) with a template in
+// which `$1` and `${name}` stand for a group and `$0` for the whole match.  When the
+// replacement needs CODE — Python's `re.sub` with a callback — walk `capture_all` and build
+// the result from the subject's own spans: four lines, and nothing is copied twice.
+
+fn replacing_and_the_walk_idiom() {
+  assert("2026-10-14".replace_on("(\\d+)-(\\d+)-(\\d+)", "$3/$2/$1") == "14/10/2026", "a template");
+  assert("a1b2c3".replace_on("[0-9]", "#", 2) == "a#b#c3", "limit 2: the first two matches");
+
+  s = "one two three";
+  out = "";
+  last = 0;
+  for m in s.capture_all("\\b[a-z]+\\b") {
+    out += s[last..m.start] + m.text.to_uppercase();
+    last = m.end;
+  }
+  out += s[last..];
+  assert(out == "ONE TWO THREE", "the walk idiom, got {out}");
+
+  println("replace : 14/10/2026, and the walk gives {out}");
 }
 
 // ## Where to go next
 //
-// - `README.md` — the pattern syntax the Rust `regex` crate accepts, and the roadmap
-//   (`match_groups` and `replace` are the next increment).
-// - `tests/worked-examples.loft` — `@RGX-001` … `@RGX-004`, the four contracts a signature
+// - `README.md` — the pattern syntax the Rust `regex` crate accepts, and what is not here
+//   (a `Regex` handle, a callback `replace`, lookaround).
+// - `tests/worked-examples.loft` — `@RGX-001` … `@RGX-008`, the contracts a signature
 //   cannot state, each a running test rather than a snippet.
 // - The stdlib's own `find`, `split`, `contains` and `starts_with` for literal text work —
 //   they need no import and no pattern compilation.

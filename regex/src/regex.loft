@@ -12,17 +12,28 @@
 //
 // The public API is subject-first text methods, named with the conventional
 // regex verbs so they read naturally on a `text`:
-//   * line.search("[0-9]+")     -> byte offset of the first match, or null
-//   * line.matches("[0-9]+")    -> true if the pattern matches anywhere
+//   * line.search("[0-9]+")          -> byte offset of the first match, or null
+//   * line.matches("[0-9]+")         -> true if the pattern matches anywhere
+//   * line.capture("(\\w+)=(.+)")    -> the first match with its groups, or null
+//   * line.capture_all("[0-9]+")     -> every non-overlapping match
+//   * line.replace_on("[0-9]+", "#") -> the text with the matches replaced
 //   * for f in line.split_on("[,;]") { … }   -> lazy split on the pattern
-// The verbs dodge the stdlib literal-text methods deliberately: bare `find`
-// and `split` on `text` are already the stdlib's *literal* substring-find and
-// character-split (C95 blocks reusing either name, even as an overload), so
-// regex uses `search` (cf. JS `String.search`, Python `re.search`) and
-// `split_on`.  `matches` is collision-free and keeps its bare name.
+// The verbs dodge the stdlib literal-text methods deliberately: bare `find`,
+// `split` and `replace` on `text` are the stdlib's literal substring-find,
+// character-split and literal replace (C95 blocks reusing a name, even as an
+// overload), so regex uses `search` (cf. JS `String.search`, Python
+// `re.search`), `split_on` and `replace_on`.  `matches`, `capture` and
+// `capture_all` are collision-free and keep their bare names.
 //
-// Phase 0: matches, search, split_on.  match_groups / replace are the next
-// increment (capture-group spans + 3-arg-text returns).
+// Every offset is a BYTE offset on a code-point boundary (@PLN192): the engine
+// matches by character, so a span never cuts a character where a hand-written
+// `s[a..b]` can.  Slice with it; compare it against `size()`, never `len()`.
+//
+// A `Match` holds no copy of the subject.  Its texts are built as slices of
+// the subject and read as values, the shape under which the compiler keeps
+// them views of the subject on `--native` (`(R-DecodeView)`, @C141); the
+// interpreter copies and is the oracle.  So `m.group(1)` is Python's spelling
+// without Python's copy.
 
 // --- Internal natives (bridge to the Rust `regex` crate) ---
 
@@ -36,32 +47,123 @@ fn is_match(pattern: text, input: text) -> boolean;
 fn match_start(pattern: text, input: text) -> integer;
 #native
 
-// Byte offset of the END of the first match, or null.
-fn match_end(pattern: text, input: text) -> integer;
+// The START of the first match at or after byte `from`, with the whole input
+// as context — `^` and `\b` see the bytes before `from` — or null.
+fn match_start_at(pattern: text, input: text, from: integer) -> integer;
 #native
 
-// (internal) The split loop.  Distinct name so unqualified calls inside this
-// module resolve here, not to stdlib `text.split` (character separator).
-// Yields each piece lazily; regex byte offsets line up with loft's
-// byte-indexed text slicing — so the running bound is `size()` (bytes), not
-// `len()` (characters).
-fn split_iter(pattern: text, input: text) -> iterator<text> {
-  pos = 0;
-  n = input.size();
-  while true {
-    rest = input[pos..n];
-    s = match_start(pattern, rest);
-    if s < 0 {
-      yield rest;
-      break;
-    }
-    yield input[pos..pos + s];
-    e = match_end(pattern, rest);
-    if e <= s {
-      e = s + 1;
-    }
-    pos = pos + e;
+// The END of that same match, or null.
+fn match_end_at(pattern: text, input: text, from: integer) -> integer;
+#native
+
+// The spans of the first match at or after `from`: `[s0, e0, s1, e1, …]`, the
+// whole match first, then every group in pattern order, a group that did not
+// take part as `-1, -1`; empty when nothing matched or the pattern is invalid.
+// The ONE span-answering native: every `Match` is built from its answer.
+fn spans(pattern: text, input: text, from: integer) -> vector<integer>;
+#native
+
+// The group names of `pattern`, each preceded by `\n`: one unnamed group is
+// `"\n"`, no group at all is `""`.
+fn group_names(pattern: text) -> text;
+#native
+
+// `input` with the first `limit` matches replaced by `template` (all when
+// `limit` is 0); unchanged when the pattern is invalid.
+fn replace_native(pattern: text, input: text, template: text, limit: integer) -> text;
+#native
+
+// The parser's message for a pattern that does not compile, handed out ONCE
+// per pattern per process; "" for a valid or an already reported one.
+fn pattern_error(pattern: text) -> text;
+#native
+
+// A pattern that does not compile answers a miss (@RGX-003) AND, the first
+// time it is used, one warning naming the pattern and the parser's message —
+// the channel the stdlib gives an unguarded `÷ 0` (@C80): the value stays a
+// value, the fault is said once.
+fn report(pattern: text) {
+  e = pattern_error(pattern);
+  if e != "" {
+    log_warn("regex: the pattern `{pattern}` does not compile: {e}", "regex", 0);
   }
+}
+
+// --- The match ---
+
+// One capture group of a match.  `text` is null when the group did not take
+// part (an alternation branch not taken, an optional group that matched
+// nothing); `start` and `end` are then -1.
+pub struct Group {
+  pub text: text?,
+  pub start: integer,
+  pub end: integer,
+}
+
+// A match of a pattern in a subject: the matched text, its byte span, and its
+// groups in pattern order (group 1 first — `text` IS group 0).  `names` holds
+// one entry per group, "" for an unnamed one, so `named` is a lookup.
+pub struct Match {
+  pub text: text,
+  pub start: integer,
+  pub end: integer,
+  pub groups: vector<Group>,
+  pub names: vector<text>,
+}
+
+// Group `i` of the match (1-based, `group(0)` is the whole match), or null
+// when it did not take part, there is no such group, or there was no match:
+// the receiver is nullable so `line.capture(p).group(1)` reads in one go, a
+// miss answering null all the way down.
+pub fn group(self: Match?, i: integer) -> text? {
+  if self == null || i < 0 { return null; }
+  if i == 0 { return self.text; }
+  g = self.groups[i - 1];
+  if g == null { return null; }
+  g.text
+}
+
+// The group called `name`, or null when the pattern has no such name, the
+// group did not take part, or there was no match.
+pub fn named(self: Match?, name: text) -> text? {
+  if self == null || name == "" { return null; }
+  for n in self.names {
+    if n == name {
+      g = self.groups[n#index];
+      if g == null { return null; }
+      return g.text;
+    }
+  }
+  null
+}
+
+// The names of a pattern's groups as a vector, "" for an unnamed group.
+fn names_of(pattern: text) -> vector<text> {
+  nm = group_names(pattern);
+  if nm == "" { return []; }
+  nm[1..].split('\n')
+}
+
+// The first match of `pattern` in `self` at or after byte `from`, built from
+// the ONE span native: every text in it is a slice of `self`.
+fn capture_from(self: text, pattern: text, from: integer) -> Match? {
+  sp = spans(pattern, self, from);
+  if len(sp) < 2 { return null; }
+  gs: vector<Group> = [];
+  i = 2;
+  while i + 1 < len(sp) {
+    s = sp[i]?;
+    e = sp[i + 1]?;
+    if s < 0 {
+      gs += [Group { text: null, start: -1, end: -1 }];
+    } else {
+      gs += [Group { text: self[s..e], start: s, end: e }];
+    }
+    i += 2;
+  }
+  s0 = sp[0]?;
+  e0 = sp[1]?;
+  Match { text: self[s0..e0], start: s0, end: e0, groups: gs, names: names_of(pattern) }
 }
 
 // --- Public API: subject-first text methods (call as line.verb(pattern)) ---
@@ -73,8 +175,9 @@ fn split_iter(pattern: text, input: text) -> iterator<text> {
 // Example: @RGX-001 — why this is `search` and not `find`, and what a bare
 // `find(pattern, input)` answers instead.
 // Example: @RGX-002 — the answer is a BYTE offset (slice with it, compare it to
-// `size()` not `len()`), and a miss is null despite the `integer` return type.
-pub fn search(self: text, pattern: text) -> integer {
+// `size()` not `len()`), and a miss is null.
+pub fn search(self: text, pattern: text) -> integer? {
+  report(pattern);
   match_start(pattern, self)
 }
 
@@ -82,9 +185,74 @@ pub fn search(self: text, pattern: text) -> integer {
 // BOTH a method (`line.matches(p)`) and a free function (`matches(line, p)`).
 // Collision-free on `text` (the stdlib has `contains`, not `matches`).
 // Example: @RGX-003 — a pattern that never compiled answers false, exactly like
-// text that simply did not match.
+// text that simply did not match — and says so once.
 pub fn matches(self: text, pattern: text) -> boolean {
+  report(pattern);
   is_match(pattern, self)
+}
+
+// The first match of `pattern` in the text with its capture groups, or null
+// when there is none (or the pattern is invalid).  Call as
+//   m = line.capture("^(\\w+)=(.+)$");  if m != null { key = m.group(1)?; }
+// Example: @RGX-005 — a group that did not take part is null, not "".
+// Example: @RGX-006 — every offset is a byte on a code-point boundary.
+pub fn capture(self: text, pattern: text) -> Match? {
+  report(pattern);
+  self.capture_from(pattern, 0)
+}
+
+// Every non-overlapping match of `pattern` in the text, in order, each with
+// its groups; empty when there is none.  An empty match advances one
+// character, so `a*` on `"baa"` answers three matches: `""`, `"aa"`, `""`.
+// Example: @RGX-007 — the walk idiom that replaces `re.sub` with a callback.
+pub fn capture_all(self: text, pattern: text) -> vector<Match> {
+  report(pattern);
+  out: vector<Match> = [];
+  pos = 0;
+  n = size(self);
+  while pos <= n {
+    m = self.capture_from(pattern, pos);
+    if m == null { break; }
+    s = m.start?;
+    e = m.end?;
+    pos = if e > s { e } else { e + 1 };
+    out += [m];
+  }
+  out
+}
+
+// The text with its matches of `pattern` replaced by `template`, in which
+// `$1` / `${name}` stand for a group, `$0` for the whole match and `$$` for a
+// dollar.  `limit` bounds how many matches are replaced, from the left; 0
+// (the default) replaces every one.  Named `replace_on` beside `split_on`:
+// bare `replace` on text is the stdlib's literal replace.
+// Example: @RGX-008 — a template is not a format string: `{` is literal there.
+pub fn replace_on(self: text, pattern: text, template: text, limit: integer = 0) -> text {
+  report(pattern);
+  replace_native(pattern, self, template, limit)
+}
+
+// (internal) The split loop.  Distinct name so unqualified calls inside this
+// module resolve here, not to stdlib `text.split` (character separator).
+// Yields each piece lazily.  The subject is searched FROM a position, never
+// re-sliced: a slice would restart `^` and `\b` at every piece boundary, so
+// `"abab".split_on("^ab")` answered three pieces where one match is correct.
+fn split_iter(pattern: text, input: text) -> iterator<text> {
+  pos = 0;
+  n = input.size();
+  while true {
+    s = match_start_at(pattern, input, pos);
+    if s < 0 {
+      yield input[pos..n];
+      break;
+    }
+    e = match_end_at(pattern, input, pos);
+    if e <= s {
+      e = s + 1;
+    }
+    yield input[pos..s];
+    pos = e;
+  }
 }
 
 // Split the text on matches of `pattern`, yielding each piece lazily through
@@ -95,30 +263,6 @@ pub fn matches(self: text, pattern: text) -> boolean {
 // Example: @RGX-004 — it yields the gaps between matches, so a separator at
 // either end leaves an empty piece and unmatched text comes back as ONE piece.
 pub fn split_on(self: text, pattern: text) -> iterator<text> {
+  report(pattern);
   yield from split_iter(pattern, self);
 }
-
-// --- Superseded spellings (kept working; steered to the clean verbs) ---
-// An earlier release shipped `regex_`-prefixed methods (`line.regex_find` /
-// `line.regex_split`).  They still work unchanged; the recommended-idiom channel
-// (@PLN102 arc C) steers new calls to `search` / `split_on`.  The pattern-first
-// free functions `find` / `split` of that release are gone: the stdlib's `text`
-// methods of the same names take every bare call, and a superseded function
-// that a matching method shadows is removed, not kept (COMPATIBILITY.md).
-
-// `find` as a METHOD on the text, for a caller that prefers `s.regex_find(p)`.
-// Superseded by this library's `search`, the same operation under the
-// conventional regex verb — the prefix existed only because a bare `find`
-// resolves to the stdlib's literal-substring method first.
-pub fn regex_find(self: text, pattern: text) -> integer {
-  self.search(pattern)
-}
-#superseded "search"
-
-// `split` as a method, and superseded by `split_on` for the same reason.  The
-// distinction that matters: this splits on a PATTERN, while the stdlib's bare
-// `split` splits on a character.
-pub fn regex_split(self: text, pattern: text) -> iterator<text> {
-  yield from self.split_on(pattern);
-}
-#superseded "split_on"
