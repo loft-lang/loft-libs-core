@@ -7,8 +7,8 @@
 
 [package]
 name    = "script"
-version = "0.1.1"
-description = "What a script reaches for, on demand: a recursive walk, a copy, a glob — each a method on text that loads the library on use."
+version = "0.2.0"
+description = "What a script reaches for, on demand: a recursive walk, a copy, a glob, a set of texts — each a method that loads the library on use."
 categories = ["cli"]
 loft    = ">=2026.10.0"
 repository = "loft-libs-core"
@@ -23,3 +23,8 @@ entry = "src/script.loft"
 # loads the library the way `line.matches(p)` loads regex.
 [triggers]
 enabled = true
+# The BUILDERS: the few free functions a script may call bare — `set(words)` — that load the
+# library the way a method does.  Explicit and short on purpose: the bare namespace is the
+# program's, a definition of the same name in the program wins, and `script::set(…)` always
+# reaches this one.
+builders = ["set"]

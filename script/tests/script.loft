@@ -59,3 +59,29 @@ fn main() {
   test_glob_matches_one_directory();
   println("ok");
 }
+
+fn test_a_set_holds_each_text_once_in_key_order() {
+  seen = set(["c", "a", "b", "a"]);
+  assert(len(seen) == 3, "three distinct texts, got {len(seen)}");
+  assert(seen.words() == ["a", "b", "c"], "key order: {seen.words()}");
+  assert(seen.has("a") && !seen.has("z"), "membership");
+  seen.put("z");
+  seen.put("a");
+  assert(len(seen) == 4 && seen.has("z"), "put adds once: {seen.words()}");
+  assert(len(set([])) == 0, "set([]) is the empty set");
+  assert(len(script::set(["q"])) == 1, "the qualified spelling always reaches the builder");
+}
+
+fn test_minus_is_the_texts_not_in_the_other() {
+  a = set(["x", "y", "z"]);
+  b = set(["y"]);
+  assert(a.minus(b) == ["x", "z"], "a minus b: {a.minus(b)}");
+  assert(len(b.minus(a)) == 0, "b minus a is empty");
+  assert(a.minus(a).len() == 0, "a minus itself");
+  // the symmetric difference of two sets whose sizes differ by one is one text or none
+  d = a.minus(set(["x", "y"]));
+  assert(d == ["z"], "one apart: {d}");
+  decl: sorted<Word[key]> = [];
+  decl.put("q");
+  assert(decl.words() == ["q"], "a set declared by its element type");
+}
