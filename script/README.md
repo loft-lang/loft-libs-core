@@ -15,6 +15,11 @@ primitives the runtime already answers, and each hangs off `text`, so a script w
 | `src.copy_to(dst)` | `boolean` | the bytes of `src` written to `dst` as they are; false when `src` cannot be read or the write fails, and nothing written |
 | `pattern.glob()` | `vector<text>` | the paths in one directory matching the last component: `*` any run, `?` one character, the directory part literal; name order |
 | `glob_match(pattern, name)` | `boolean` | the match alone, for a name already in hand |
+| `set(words)` | `sorted<Word[key]>` | a set of texts: each once, in key order — a keyed collection over the one-field `Word`, with every lookup, removal and prefix range such a collection has; `set([])` is empty.  The builder: `script::set(words)` always, bare once builder triggers load a library |
+| `s.put(w)` | | `w` in the set, once |
+| `s.has(w)` | `boolean` | membership |
+| `a.minus(b)` | `vector<text>` | the texts of `a` not in `b`, in key order |
+| `s.words()` | `vector<text>` | the texts, in key order |
 
 ## Install
 

@@ -93,3 +93,48 @@ fn glob_at(p: vector<character>, pi: integer, n: vector<character>, ni: integer)
   if c == '?' || c == n[ni] { return glob_at(p, pi + 1, n, ni + 1); }
   false
 }
+
+// --- A set of texts ---
+//
+// A set is a keyed collection over a one-field record, and that is what these are: a
+// `sorted<Word[key]>` holds each text once, in key order, with the lookup, the removal and
+// the prefix range every keyed collection has.  What a script could not write in one line
+// was the building and the algebra: `set(words)` BUILDS one (the library's builder, bare
+// once builder triggers load a library, `script::set(words)` always), and the rest are
+// methods on the set — `seen.put(w)`, `seen.has(w)`, `a.minus(b)`, `seen.words()` — so a
+// script names no type.  The element is `Word`, for a field that declares the set
+// (`names: sorted<Word[key]>`), read as `x.key` in a walk.
+
+/// One element of a set of texts: the text is the key.
+pub struct Word { pub key: text }
+
+/// A set of the texts in `words`: each once, in key order.  `set([])` is the empty set.
+pub fn set(words: vector<text>) -> sorted<Word[key]> {
+  out: sorted<Word[key]> = [];
+  for w in words { out += [Word { key: w }]; }
+  out
+}
+
+/// Is `w` in the set?
+pub fn has(self: sorted<Word[key]>, w: text) -> boolean {
+  self[w] != null
+}
+
+/// Put `w` in the set; a text already there stays once.
+pub fn put(self: sorted<Word[key]>, w: text) {
+  self += [Word { key: w }];
+}
+
+/// The texts of `self` that are not in `other`, in key order.
+pub fn minus(self: sorted<Word[key]>, other: sorted<Word[key]>) -> vector<text> {
+  out: vector<text> = [];
+  for x in self { if other[x.key] == null { out += [x.key]; } }
+  out
+}
+
+/// The texts of the set as a vector, in key order.
+pub fn words(self: sorted<Word[key]>) -> vector<text> {
+  out: vector<text> = [];
+  for x in self { out += [x.key]; }
+  out
+}
