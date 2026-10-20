@@ -7,7 +7,7 @@
 
 [package]
 name    = "script"
-version = "0.3.0"
+version = "0.3.1"
 description = "What a script reaches for, on demand: a recursive walk (sorted, or lazy), a copy, a glob, a set of texts — each a method that loads the library on use."
 categories = ["cli"]
 loft    = ">=2026.10.0"

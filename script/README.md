@@ -12,7 +12,7 @@ primitives the runtime already answers, and each hangs off `text`, so a script w
 | Call | Answers | Notes |
 |---|---|---|
 | `dir.walk(suffix = "")` | `vector<text>` | every file below `dir`, recursively, paths joined with `/`, in path order; a symbolic link is never followed; `suffix` keeps the names ending with it |
-| `dir.walk_lazy(suffix = "")` | `iterator<text>` | the same files one at a time, for a `for` loop: each directory's files in name order, then its subdirectories, depth first — not sorted, and nothing listed before the loop reaches it.  A link to a directory is never entered; a link to a file is given like any file.  About twice as fast as `walk` on a large tree |
+| `dir.walk_lazy(suffix = "")` | `iterator<text>` | the same files one at a time, for a `for` loop: each directory's files in name order, then its subdirectories, depth first — not sorted, and nothing listed before the loop reaches it.  A link to a directory is never entered; a link to a file is given like any file.  `walk` is this, linked files left out, sorted |
 | `src.copy_to(dst)` | `boolean` | the bytes of `src` written to `dst` as they are; false when `src` cannot be read or the write fails, and nothing written |
 | `pattern.glob()` | `vector<text>` | the paths in one directory matching the last component: `*` any run, `?` one character, the directory part literal; name order.  A name starting with `.` matches only a pattern starting with `.` |
 | `glob_match(pattern, name)` | `boolean` | the match alone, for a name already in hand |
