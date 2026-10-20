@@ -7,8 +7,8 @@
 
 [package]
 name    = "script"
-version = "0.2.0"
-description = "What a script reaches for, on demand: a recursive walk, a copy, a glob, a set of texts — each a method that loads the library on use."
+version = "0.3.0"
+description = "What a script reaches for, on demand: a recursive walk (sorted, or lazy), a copy, a glob, a set of texts — each a method that loads the library on use."
 categories = ["cli"]
 loft    = ">=2026.10.0"
 repository = "loft-libs-core"

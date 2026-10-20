@@ -31,6 +31,39 @@ fn test_walk_takes_every_file_below_in_path_order() {
   assert(len("{r}/absent".walk()) == 0, "an absent directory");
 }
 
+fn test_walk_lazy_gives_each_file_once_directory_by_directory() {
+  r = root();
+  build(r);
+  got: vector<text> = [];
+  for p in r.walk_lazy() { got += [p]; }
+  // The root's own file first, then `a` (its file, then `a/b` by name), then `c`.
+  want = ["{r}/one.loft", "{r}/a/two.loft", "{r}/a/b/four.loft", "{r}/a/b/three.txt", "{r}/c/five.md"];
+  assert(got == want, "directory by directory, names in order: {got}");
+  lofts: vector<text> = [];
+  for p in r.walk_lazy(".loft") { lofts += [p]; }
+  assert(lofts == ["{r}/one.loft", "{r}/a/two.loft", "{r}/a/b/four.loft"], "by suffix: {lofts}");
+  sort(lofts);
+  assert(lofts == r.walk(".loft"), "the same files as walk");
+  n = 0;
+  for _p in "{r}/one.loft".walk_lazy() { n += 1; }
+  for _p in "{r}/absent".walk_lazy() { n += 1; }
+  assert(n == 0, "a file and an absent path give no files: {n}");
+}
+
+fn test_walk_lazy_stops_where_the_loop_stops() {
+  r = root();
+  build(r);
+  first = "";
+  for p in r.walk_lazy() { first = p; break; }
+  assert(first == "{r}/one.loft", "the first file: {first}");
+  w = "{r}/a".walk_lazy();
+  for _p in w { break; }
+  rest: vector<text> = [];
+  for p in w { rest += [p]; }
+  // A walk is a generator: a second loop over it goes on where the first stopped.
+  assert(rest == ["{r}/a/b/four.loft", "{r}/a/b/three.txt"], "the rest of the walk: {rest}");
+}
+
 fn test_copy_to_moves_the_bytes_as_they_are() {
   r = root();
   build(r);
@@ -51,10 +84,16 @@ fn test_glob_matches_one_directory() {
   assert(glob_match("*.loft", "x.loft") && !glob_match("*.loft", "x.loft.bak"), "the star ends where the pattern does");
   assert(glob_match("a*b*c", "abc") && glob_match("a*b*c", "axxbyyc") && !glob_match("a*b*c", "ac"), "several stars");
   assert(glob_match("", "") && !glob_match("", "a") && !glob_match("?", ""), "the empty cases");
+  file("{r}/a/.hidden.loft").write("");
+  assert("{r}/a/*.loft".glob() == ["{r}/a/two.loft"], "a star does not reach a hidden name");
+  assert("{r}/a/.*".glob() == ["{r}/a/.hidden.loft"], "a pattern that starts with a dot does");
+  assert(!glob_match("*", ".loft") && !glob_match("?loft", ".loft") && glob_match(".l*", ".loft"), "the dot rule");
 }
 
 fn main() {
   test_walk_takes_every_file_below_in_path_order();
+  test_walk_lazy_gives_each_file_once_directory_by_directory();
+  test_walk_lazy_stops_where_the_loop_stops();
   test_copy_to_moves_the_bytes_as_they_are();
   test_glob_matches_one_directory();
   println("ok");
