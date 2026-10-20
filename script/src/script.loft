@@ -7,43 +7,42 @@
 // and a null discharge, the glob that was a listing and a filter.  Each hangs off `text` so
 // it fires as a trigger: a script writes `dir.walk(".loft")` and names no library.
 
-/// Every file under the directory `self`, in every subdirectory, as paths joined with `/`
-/// below `self`, in path order.  A symbolic link is never followed, so a loop in the tree is
-/// not a loop here.  `suffix` keeps only the names that end with it (`".loft"`); `""` keeps
-/// every file.  A path that is not a directory answers no files.
-pub fn walk(self: text, suffix: text = "") -> vector<text> {
+/// The files under the directory `self`, in every subdirectory, one at a time as a `for`
+/// loop asks for them: `for p in "src".walk(".rs") { … }`.  Nothing is listed before the loop
+/// reaches it and nothing is sorted: each directory gives its files in name order, then its
+/// subdirectories are walked the same way, depth first.  `suffix` keeps only the names that
+/// end with it (`".loft"`); `""` keeps every file.  A path that is not a directory gives no
+/// files.  Use [`walk_sorted`] when the order matters.
+///
+/// A symbolic link to a DIRECTORY is never entered, so a loop in the tree is not a loop
+/// here.  A link to a FILE is given like any file, as `find` and Python's `os.walk` do;
+/// `links: false` leaves it out, at the cost of one more check per file given.  A library
+/// placed out of process should hand its callers `walk_sorted`, the whole answer in one
+/// value, rather than one crossing per file.
+pub fn walk(self: text, suffix: text = "", links: boolean = true) -> iterator<text> {
+  if is_dir(self) { yield from walk_from(self, suffix, links); }
+}
+
+/// The files [`walk`] gives, as one vector in path order — the same files, at the cost of
+/// listing them all before the first is used, and of the sort.  `walk_sorted(suffix,
+/// links: false)` is the walk of 0.2 and before, which never gave a linked file.
+pub fn walk_sorted(self: text, suffix: text = "", links: boolean = true) -> vector<text> {
   found: vector<text> = [];
-  for p in self.walk_lazy(suffix) { if !is_symlink(p) { found += [p]; } }
+  for p in self.walk(suffix, links: links) { found += [p]; }
   sort(found);
   found
 }
 
-/// The files under the directory `self`, one at a time as a `for` loop asks for them:
-/// `for p in "src".walk_lazy(".rs") { … }`.  Use it when the order does not matter, the
-/// tree is large, or the loop may stop early — nothing is listed before it is reached, and
-/// nothing is sorted.  Each directory gives its files in name order, then its subdirectories
-/// are walked the same way, depth first.  `suffix` keeps only the names that end with it;
-/// `""` keeps every file.  A path that is not a directory gives no files.
-///
-/// Two differences from [`walk`]: the order is not path order, and a symbolic link to a FILE
-/// is given like any file (as `find` and Python's `os.walk` do) — a link to a DIRECTORY is
-/// still never entered, so a loop in the tree is not a loop here.  `walk` is this walk with
-/// the linked files left out and the paths sorted.  A library placed out of process should
-/// hand its callers `walk`, the whole answer in one value, rather than one crossing per file.
-pub fn walk_lazy(self: text, suffix: text = "") -> iterator<text> {
-  if is_dir(self) { yield from walk_from(self, suffix); }
-}
-
-fn walk_from(dir: text, suffix: text) -> iterator<text> {
+fn walk_from(dir: text, suffix: text, links: boolean) -> iterator<text> {
   below: vector<text> = [];
   for f in file(dir).files() {
     if f.format == Format.Directory {
       if !is_symlink(f.path) { below += [f.path]; }
     } else if f.format != Format.NotExists && (suffix == "" || f.path.ends_with(suffix)) {
-      yield f.path;
+      if links || !is_symlink(f.path) { yield f.path; }
     }
   }
-  for d in below { yield from walk_from(d, suffix); }
+  for d in below { yield from walk_from(d, suffix, links); }
 }
 
 /// Copy the file at `self` to `dst`, bytes as they are: true when `dst` now holds them.  A

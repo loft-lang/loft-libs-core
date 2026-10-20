@@ -7,13 +7,13 @@
 
 [package]
 name    = "script"
-version = "0.3.1"
-description = "What a script reaches for, on demand: a recursive walk (sorted, or lazy), a copy, a glob, a set of texts — each a method that loads the library on use."
+version = "0.4.0"
+description = "What a script reaches for, on demand: a recursive walk (lazy, or sorted), a copy, a glob, a set of texts — each a method that loads the library on use."
 categories = ["cli"]
 loft    = ">=2026.10.0"
 repository = "loft-libs-core"
 
-api_compatible_with  = "0.1.0"
+api_compatible_with  = "0.4.0"
 data_compatible_with = "0.1.0"
 
 [library]
