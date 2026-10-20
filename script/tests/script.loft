@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
 // The three helpers on a tree built here: a walk that takes every file below a directory
-// and never follows a link, a copy that moves bytes as they are, a glob over one directory.
+// and never enters a linked one, a copy that moves bytes as they are, a glob over one directory.
 // Every expected value by hand.
 use script::*;
 
@@ -18,45 +18,48 @@ fn build(r: text) {
   file("{r}/c/five.md").write("# five\n");
 }
 
-fn test_walk_takes_every_file_below_in_path_order() {
+fn test_walk_sorted_takes_every_file_below_in_path_order() {
   r = root();
   build(r);
-  all = r.walk();
+  all = r.walk_sorted();
   assert(len(all) == 5, "five files: {all}");
   assert(all[0] == "{r}/a/b/four.loft" && all[4] == "{r}/one.loft", "path order: {all}");
-  lofts = r.walk(".loft");
+  lofts = r.walk_sorted(".loft");
   assert(lofts == ["{r}/a/b/four.loft", "{r}/a/two.loft", "{r}/one.loft"], "by suffix: {lofts}");
-  assert(len("{r}/c".walk()) == 1, "a subdirectory alone");
-  assert(len("{r}/one.loft".walk()) == 0, "a file is not a directory");
-  assert(len("{r}/absent".walk()) == 0, "an absent directory");
+  assert(len("{r}/c".walk_sorted()) == 1, "a subdirectory alone");
+  assert(len("{r}/one.loft".walk_sorted()) == 0, "a file is not a directory");
+  assert(len("{r}/absent".walk_sorted()) == 0, "an absent directory");
+  // No link in this tree, so leaving the linked files out changes nothing; a link needs a
+  // tool loft lacks, and is probed by hand.
+  assert(r.walk_sorted(".loft", links: false) == lofts, "links: false on a tree without one");
 }
 
-fn test_walk_lazy_gives_each_file_once_directory_by_directory() {
+fn test_walk_gives_each_file_once_directory_by_directory() {
   r = root();
   build(r);
   got: vector<text> = [];
-  for p in r.walk_lazy() { got += [p]; }
+  for p in r.walk() { got += [p]; }
   // The root's own file first, then `a` (its file, then `a/b` by name), then `c`.
   want = ["{r}/one.loft", "{r}/a/two.loft", "{r}/a/b/four.loft", "{r}/a/b/three.txt", "{r}/c/five.md"];
   assert(got == want, "directory by directory, names in order: {got}");
   lofts: vector<text> = [];
-  for p in r.walk_lazy(".loft") { lofts += [p]; }
+  for p in r.walk(".loft") { lofts += [p]; }
   assert(lofts == ["{r}/one.loft", "{r}/a/two.loft", "{r}/a/b/four.loft"], "by suffix: {lofts}");
   sort(lofts);
-  assert(lofts == r.walk(".loft"), "the same files as walk");
+  assert(lofts == r.walk_sorted(".loft"), "the same files as walk_sorted");
   n = 0;
-  for _p in "{r}/one.loft".walk_lazy() { n += 1; }
-  for _p in "{r}/absent".walk_lazy() { n += 1; }
+  for _p in "{r}/one.loft".walk() { n += 1; }
+  for _p in "{r}/absent".walk() { n += 1; }
   assert(n == 0, "a file and an absent path give no files: {n}");
 }
 
-fn test_walk_lazy_stops_where_the_loop_stops() {
+fn test_walk_stops_where_the_loop_stops() {
   r = root();
   build(r);
   first = "";
-  for p in r.walk_lazy() { first = p; break; }
+  for p in r.walk() { first = p; break; }
   assert(first == "{r}/one.loft", "the first file: {first}");
-  w = "{r}/a".walk_lazy();
+  w = "{r}/a".walk();
   for _p in w { break; }
   rest: vector<text> = [];
   for p in w { rest += [p]; }
@@ -91,9 +94,9 @@ fn test_glob_matches_one_directory() {
 }
 
 fn main() {
-  test_walk_takes_every_file_below_in_path_order();
-  test_walk_lazy_gives_each_file_once_directory_by_directory();
-  test_walk_lazy_stops_where_the_loop_stops();
+  test_walk_sorted_takes_every_file_below_in_path_order();
+  test_walk_gives_each_file_once_directory_by_directory();
+  test_walk_stops_where_the_loop_stops();
   test_copy_to_moves_the_bytes_as_they_are();
   test_glob_matches_one_directory();
   println("ok");
