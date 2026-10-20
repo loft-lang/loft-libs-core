@@ -13,23 +13,9 @@
 /// every file.  A path that is not a directory answers no files.
 pub fn walk(self: text, suffix: text = "") -> vector<text> {
   found: vector<text> = [];
-  if !is_dir(self) { return found; }
-  found = walk_into(self, suffix, found);
+  for p in self.walk_lazy(suffix) { if !is_symlink(p) { found += [p]; } }
   sort(found);
   found
-}
-
-fn walk_into(dir: text, suffix: text, out: vector<text>) -> vector<text> {
-  result = out;
-  for f in file(dir).files() {
-    if is_symlink(f.path) { continue; }
-    if f.format == Format.Directory {
-      result = walk_into(f.path, suffix, result);
-    } else if suffix == "" || f.path.ends_with(suffix) {
-      result += [f.path];
-    }
-  }
-  result
 }
 
 /// The files under the directory `self`, one at a time as a `for` loop asks for them:
@@ -41,10 +27,9 @@ fn walk_into(dir: text, suffix: text, out: vector<text>) -> vector<text> {
 ///
 /// Two differences from [`walk`]: the order is not path order, and a symbolic link to a FILE
 /// is given like any file (as `find` and Python's `os.walk` do) — a link to a DIRECTORY is
-/// still never entered, so a loop in the tree is not a loop here.  Checking only the
-/// directories for a link is most of the speed: on a large tree, the per-file check is half
-/// of what `walk` costs.  A library placed out of process should hand its callers `walk`,
-/// the whole answer in one value, rather than one crossing per file.
+/// still never entered, so a loop in the tree is not a loop here.  `walk` is this walk with
+/// the linked files left out and the paths sorted.  A library placed out of process should
+/// hand its callers `walk`, the whole answer in one value, rather than one crossing per file.
 pub fn walk_lazy(self: text, suffix: text = "") -> iterator<text> {
   if is_dir(self) { yield from walk_from(self, suffix); }
 }
