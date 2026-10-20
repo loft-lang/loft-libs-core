@@ -14,72 +14,98 @@
 // Each `#native "n_*"` symbol is supplied by the `native/` cdylib via a
 // `#[loft_native]` bridge; `loft-ffi-build` scans these annotations to emit
 // the cdylib's register list, so the bindings can never drift.
+//
+// `#pure` marks every native whose value is its only effect — all but the two
+// that draw entropy (`ecdsa_p256_keygen`, `random_bytes`).  loft then computes
+// a call made twice on unchanged arguments once: a payload validated by
+// decoding it and then decoded to use it is decoded once.
 
 fn sha256_native(data: text) -> text;
 #native "n_sha256"
+#pure
 
 fn sha256_b64_native(data_b64: text) -> text;
 #native "n_sha256_b64"
+#pure
 
 fn hmac_sha256_native(key: text, data: text) -> text;
 #native "n_hmac_sha256"
+#pure
 
 fn base64_encode_native(data: text) -> text;
 #native "n_base64_encode"
+#pure
 
 fn base64_decode_native(data: text) -> text;
 #native "n_base64_decode"
+#pure
 
 fn base64url_encode_native(data: text) -> text;
 #native "n_base64url_encode"
+#pure
 
 fn ed25519_public_key_native(secret_key_b64: text) -> text;
 #native "n_ed25519_public_key"
+#pure
 
 fn ed25519_sign_native(secret_key_b64: text, message_b64: text) -> text;
 #native "n_ed25519_sign"
+#pure
 
 fn ed25519_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
 #native "n_ed25519_verify"
+#pure
 
 fn ecdsa_p256_keygen_native() -> text;
 #native "n_ecdsa_p256_keygen"
 
 fn ecdsa_p256_public_key_native(secret_key_b64: text) -> text;
 #native "n_ecdsa_p256_public_key"
+#pure
 
 fn ecdsa_p256_sign_native(secret_key_b64: text, message_b64: text) -> text;
 #native "n_ecdsa_p256_sign"
+#pure
 
 fn ecdsa_p256_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
 #native "n_ecdsa_p256_verify"
+#pure
 
 fn x25519_dh_native(secret_key_b64: text, public_key_b64: text) -> text;
 #native "n_x25519_dh"
+#pure
 
 fn hkdf_sha256_native(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text;
 #native "n_hkdf_sha256"
+#pure
 
 fn hkdf_extract_native(salt_b64: text, ikm_b64: text) -> text;
 #native "n_hkdf_extract"
+#pure
 
 fn hkdf_expand_native(prk_b64: text, info_b64: text, length: integer) -> text;
 #native "n_hkdf_expand"
+#pure
 
 fn bytes_to_base64_native(bytes: vector<u8>) -> text;
 #native "n_bytes_to_base64"
+#pure
 
 fn base64_to_bytes_native(b64: text) -> vector<u8>;
 #native "n_base64_to_bytes"
+#pure
 
 fn bytes_concat_b64_native(a_b64: text, b_b64: text) -> text;
 #native "n_bytes_concat_b64"
+#pure
 
 fn aes256gcm_seal_native(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text;
 #native "n_aes256gcm_seal"
+#pure
 
 fn aes256gcm_open_native(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text;
 #native "n_aes256gcm_open"
+#pure
 
 fn random_bytes_native(length: integer) -> text;
 #native "n_random_bytes"
