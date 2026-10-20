@@ -32,6 +32,35 @@ fn walk_into(dir: text, suffix: text, out: vector<text>) -> vector<text> {
   result
 }
 
+/// The files under the directory `self`, one at a time as a `for` loop asks for them:
+/// `for p in "src".walk_lazy(".rs") { … }`.  Use it when the order does not matter, the
+/// tree is large, or the loop may stop early — nothing is listed before it is reached, and
+/// nothing is sorted.  Each directory gives its files in name order, then its subdirectories
+/// are walked the same way, depth first.  `suffix` keeps only the names that end with it;
+/// `""` keeps every file.  A path that is not a directory gives no files.
+///
+/// Two differences from [`walk`]: the order is not path order, and a symbolic link to a FILE
+/// is given like any file (as `find` and Python's `os.walk` do) — a link to a DIRECTORY is
+/// still never entered, so a loop in the tree is not a loop here.  Checking only the
+/// directories for a link is most of the speed: on a large tree, the per-file check is half
+/// of what `walk` costs.  A library placed out of process should hand its callers `walk`,
+/// the whole answer in one value, rather than one crossing per file.
+pub fn walk_lazy(self: text, suffix: text = "") -> iterator<text> {
+  if is_dir(self) { yield from walk_from(self, suffix); }
+}
+
+fn walk_from(dir: text, suffix: text) -> iterator<text> {
+  below: vector<text> = [];
+  for f in file(dir).files() {
+    if f.format == Format.Directory {
+      if !is_symlink(f.path) { below += [f.path]; }
+    } else if f.format != Format.NotExists && (suffix == "" || f.path.ends_with(suffix)) {
+      yield f.path;
+    }
+  }
+  for d in below { yield from walk_from(d, suffix); }
+}
+
 /// Copy the file at `self` to `dst`, bytes as they are: true when `dst` now holds them.  A
 /// source that cannot be read writes nothing and answers false, as does a write that fails.
 pub fn copy_to(self: text, dst: text) -> boolean {
@@ -68,8 +97,10 @@ pub fn glob(self: text) -> vector<text> {
 }
 
 /// Does `name` match `pattern`, with `*` any run and `?` one character?  A plain character
-/// matches itself only.
+/// matches itself only.  A name that starts with `.` matches only a pattern that starts with
+/// `.`, as a shell's and Python's glob have it: `*.loft` is not `.loft`, a hidden entry.
 pub fn glob_match(pattern: text, name: text) -> boolean {
+  if name.starts_with(".") && !pattern.starts_with(".") { return false; }
   pc: vector<character> = [];
   for c in pattern { pc += [c]; }
   nc: vector<character> = [];
