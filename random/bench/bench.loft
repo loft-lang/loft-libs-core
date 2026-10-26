@@ -13,7 +13,7 @@
 // interpreter, the native build and the Rust twin must print the same hash for a row, or
 // one of them is not computing the routine it claims to.
 //
-// Two rows cross into the library's native crate (`rand`, `rand_indices`: a PCG64 behind
+// Two rows cross into the library's C part (`rand`, `rand_indices`: a PCG64 behind
 // the crossing); two are pure loft (`get`, `indices`: the RandStream combined LCG).  Every
 // op seeds its own generator from `r & 1`, so each repetition differs in VALUE and never
 // in the amount of work, and the seeded sequence makes the output a fixed function of it.

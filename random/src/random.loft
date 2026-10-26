@@ -8,10 +8,17 @@
 // Draws from the ONE hidden generator every call site shares — see `rand_seed`.
 // Example: @RND-001 — why a seeded global sequence is not yours, and what a
 // RandStream gives instead.
-pub fn rand(lo: integer, hi: integer) -> integer?;
-#native
+pub fn rand(lo: integer, hi: integer) -> integer? {
+  if lo > hi { return null; }
+  rand_raw(lo, hi)
+}
 
-// Seeds the thread-local random number generator with the given value.
+// The draw itself, in C: lo + (next % (hi - lo + 1)); the empty range is answered above,
+// because a null cannot cross the C boundary.
+fn rand_raw(lo: integer, hi: integer) -> integer;
+#c "lr_rand" "int64_t(int64_t, int64_t)"
+
+// Seeds the shared random number generator with the given value.
 // Call this before rand() or rand_indices() to get reproducible sequences — but
 // note that it fixes what the GENERATOR produces, not what you receive: it is
 // shared, so one `rand()` from anywhere else shifts everything after it.  When
@@ -19,14 +26,33 @@ pub fn rand(lo: integer, hi: integer) -> integer?;
 // Example: @RND-001 — a foreign draw between two of yours, and the same
 // interruption against a RandStream.
 pub fn rand_seed(seed: integer);
-#native
+#c "lr_rand_seed" "void(int64_t)"
+
+// The next draw of the shared generator reduced modulo m, in [0, m); 0 when m < 1.
+// The step of a shuffle (`rand_indices`), published so a shuffle of your own draws
+// the same sequence.
+pub fn rand_below(m: integer) -> integer;
+#c "lr_rand_below" "int64_t(int64_t)"
 
 // Returns a vector of n integers [0, 1, ..., n-1] in a random order.
 // Useful for random iteration, shuffling, or sampling without replacement.
 // Returns an empty vector when n is 0, negative or null.
 // Example: @RND-001 — this draws from the shared global generator too.
-pub fn rand_indices(n: integer) -> vector<integer>;
-#native
+pub fn rand_indices(n: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  if n <= 0 { return out; }
+  for i in 0..n { out += [i]; }
+  // Fisher-Yates from the top, one draw per position: the order the Rust part drew in.
+  i = n - 1;
+  while i > 0 {
+    j = rand_below(i + 1);
+    t = out[i] ?? 0;
+    out[i] = out[j] ?? 0;
+    out[j] = t;
+    i -= 1;
+  }
+  out
+}
 
 // --- RandStream: owned random streams (the value tier) ---
 //
