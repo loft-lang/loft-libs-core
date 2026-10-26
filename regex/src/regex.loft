@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // --- Regex ---
-// Regular expressions for loft, backed by the Rust `regex` crate.
+// Regular expressions for loft, over a C99 engine of its own (c/regex.c).
 //
 // Deliberately minimal — regex here is the *small-script* text tool (log
 // scanning, CLI fields, quick extraction).  You pass the pattern inline;
-// compiled patterns are cached in a thread-local table, so repeated calls
+// compiled patterns are cached, so repeated calls
 // with the same pattern are cheap.  Structured parsing — grammars, ASTs,
 // recursion — is NOT this library's job; that is loft's `match` patterns over
 // a cursor (the `arguments` library's parser is written with them).
@@ -35,48 +35,64 @@
 // interpreter copies and is the oracle.  So `m.group(1)` is Python's spelling
 // without Python's copy.
 
-// --- Internal natives (bridge to the Rust `regex` crate) ---
+// --- Internal natives (the C99 engine in c/regex.c, a `[c] shim`) ---
+//
+// The engine is bound by `#c`: a text crosses as a NUL-terminated C string, a
+// `vector<integer>` as its element pointer and count, so the spans come back
+// into a buffer this side sizes from the pattern's group count.
+
+// The number of capture groups of `pattern`; -1 when it does not compile.
+fn group_count(pattern: text) -> integer;
+#c "rx_group_count" "int64_t(const char*)"
+
+// The spans of the first match at or after byte `from` written into `out`
+// (`s0 e0 s1 e1 …`, -1 -1 for a group that took no part); the count written,
+// 0 when nothing matched or the pattern is invalid.
+fn spans_into(pattern: text, input: text, from: integer, out: vector<integer>) -> integer;
+#c "rx_spans" "int64_t(const char*, const char*, int64_t, int64_t*, int64_t)"
 
 // True if `pattern` matches anywhere in `input`.
-fn is_match(pattern: text, input: text) -> boolean;
-#native
-
-// Byte offset of the START of the first match, or null.  Named distinctly
-// from stdlib `text.find` so unqualified calls inside this module resolve
-// here, not to the (reverse-argument) text method.
-fn match_start(pattern: text, input: text) -> integer;
-#native
+fn is_match_raw(pattern: text, input: text) -> integer;
+#c "rx_is_match" "int64_t(const char*, const char*)"
 
 // The START of the first match at or after byte `from`, with the whole input
 // as context — `^` and `\b` see the bytes before `from` — or null.
 fn match_start_at(pattern: text, input: text, from: integer) -> integer;
-#native
+#c "rx_match_start_at" "int64_t(const char*, const char*, int64_t)"
 
 // The END of that same match, or null.
 fn match_end_at(pattern: text, input: text, from: integer) -> integer;
-#native
-
-// The spans of the first match at or after `from`: `[s0, e0, s1, e1, …]`, the
-// whole match first, then every group in pattern order, a group that did not
-// take part as `-1, -1`; empty when nothing matched or the pattern is invalid.
-// The ONE span-answering native: every `Match` is built from its answer.
-fn spans(pattern: text, input: text, from: integer) -> vector<integer>;
-#native
+#c "rx_match_end_at" "int64_t(const char*, const char*, int64_t)"
 
 // The group names of `pattern`, each preceded by `\n`: one unnamed group is
 // `"\n"`, no group at all is `""`.
 fn group_names(pattern: text) -> text;
-#native
-
-// `input` with the first `limit` matches replaced by `template` (all when
-// `limit` is 0); unchanged when the pattern is invalid.
-fn replace_native(pattern: text, input: text, template: text, limit: integer) -> text;
-#native
+#c "rx_group_names" "const char*(const char*)"
 
 // The parser's message for a pattern that does not compile, handed out ONCE
 // per pattern per process; "" for a valid or an already reported one.
 fn pattern_error(pattern: text) -> text;
-#native
+#c "rx_error" "const char*(const char*)"
+
+fn is_match(pattern: text, input: text) -> boolean {
+  is_match_raw(pattern, input) != 0
+}
+
+fn match_start(pattern: text, input: text) -> integer {
+  match_start_at(pattern, input, 0)
+}
+
+// The spans of the first match at or after `from`: `[s0, e0, s1, e1, …]`, the
+// whole match first, then every group in pattern order, a group that did not
+// take part as `-1, -1`; empty when nothing matched or the pattern is invalid.
+// The ONE span-answering routine: every `Match` is built from its answer.
+fn spans(pattern: text, input: text, from: integer) -> vector<integer> {
+  n = group_count(pattern);
+  if n < 0 { return []; }
+  out: vector<integer> = [for _ in 0..2 * (n + 1) { -1 }];
+  if spans_into(pattern, input, from, out) == 0 { return []; }
+  out
+}
 
 // A pattern that does not compile answers a miss (@RGX-003) AND, the first
 // time it is used, one warning naming the pattern and the parser's message —
@@ -229,7 +245,88 @@ pub fn capture_all(self: text, pattern: text) -> vector<Match> {
 // Example: @RGX-008 — a template is not a format string: `{` is literal there.
 pub fn replace_on(self: text, pattern: text, template: text, limit: integer = 0) -> text {
   report(pattern);
-  replace_native(pattern, self, template, limit)
+  if group_count(pattern) < 0 { return self; }
+  out = "";
+  pos = 0;
+  n = size(self);
+  done = 0;
+  while pos <= n {
+    if limit > 0 && done >= limit { break; }
+    m = self.capture_from(pattern, pos);
+    if m == null { break; }
+    s = m.start?;
+    e = m.end?;
+    out += self[pos..s];
+    out += expand(template, m);
+    done += 1;
+    pos = if e > s { e } else { e + 1 };
+    if e == s && s < n { out += self[s..e + 1]; }
+  }
+  if pos <= n { out += self[pos..n]; }
+  out
+}
+
+// A replacement template expanded for one match, the crate's rule: `$$` is a
+// dollar; `$name` and `${name}` name a group — the longest run of letters,
+// digits and `_`, a number being a group index and `$0` the whole match; a
+// group that does not exist or took no part expands to ""; a `$` followed by
+// anything else is a dollar.
+fn expand(template: text, m: Match) -> text {
+  out = "";
+  i = 0;
+  n = size(template);
+  while i < n {
+    c = template[i..i + 1];
+    if c != "$" {
+      out += c;
+      i += 1;
+      continue;
+    }
+    if i + 1 < n && template[i + 1..i + 2] == "$" {
+      out += "$";
+      i += 2;
+      continue;
+    }
+    j = i + 1;
+    braced = j < n && template[j..j + 1] == "{{";
+    if braced { j += 1; }
+    k = j;
+    while k < n && template.is_name_byte(k) { k += 1; }
+    if k == j || (braced && (k >= n || template[k..k + 1] != "}}")) {
+      out += "$";
+      i += 1;
+      continue;
+    }
+    name = template[j..k];
+    out += m.group_by_name(name) ?? "";
+    i = if braced { k + 1 } else { k };
+  }
+  out
+}
+
+// Is byte `k` of this text a template-name byte: a letter, a digit or `_`?
+fn is_name_byte(self: text, k: integer) -> boolean {
+  c = self[k..k + 1];
+  (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_"
+}
+
+// `$name`'s group: a number is an index, anything else a group name.
+fn group_by_name(self: Match, name: text) -> text? {
+  if name.is_number() { return self.group((name as integer?) ?? -1); }
+  self.named(name)
+}
+
+// Is this text all decimal digits?
+fn is_number(self: text) -> boolean {
+  if self == "" { return false; }
+  i = 0;
+  n = size(self);
+  while i < n {
+    c = self[i..i + 1];
+    if c < "0" || c > "9" { return false; }
+    i += 1;
+  }
+  true
 }
 
 // (internal) The split loop.  Distinct name so unqualified calls inside this
