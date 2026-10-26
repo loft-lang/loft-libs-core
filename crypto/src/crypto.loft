@@ -3,118 +3,176 @@
 // --- Crypto ---
 // Cryptographic primitives: SHA-256 and HMAC, base64, Ed25519 and ES256
 // signatures, X25519 key agreement, HKDF, AES-256-GCM, a CSPRNG, and HPKE base
-// mode built from them.
+// mode built from them — over the vendored BearSSL and Monocypher, C99 the
+// package ships and loft builds itself (`c/`).
 //
 // Bytes cross the API as standard base64 `text`.  Input that is not base64 is
 // refused the way each function refuses anything malformed — "" or false, never
 // a result computed from other bytes than the ones sent.
 
-// --- Internal natives ---
+// --- The C part ---
 //
-// Each `#native "n_*"` symbol is supplied by the `native/` cdylib via a
-// `#[loft_native]` bridge; `loft-ffi-build` scans these annotations to emit
-// the cdylib's register list, so the bindings can never drift.
-//
-// `#pure` marks every native whose value is its only effect — all but the two
-// that draw entropy (`ecdsa_p256_keygen`, `random_bytes`).  loft then computes
-// a call made twice on unchanged arguments once: a payload validated by
-// decoding it and then decoded to use it is decoded once.
+// Two vendored, audited libraries carry the primitives — BearSSL (`c/vendor/bearssl`, MIT:
+// SHA-256, HMAC, HKDF, AES-256-GCM, P-256 ECDSA with RFC 6979 nonces, X25519, all
+// constant-time) and Monocypher (`c/vendor/monocypher`, BSD-2 / CC0: Ed25519) — behind the
+// one-call entry points of `c/crypto_glue.c`.  loft builds them as the package's `[c] shim`
+// for the host and for both wasm targets; no Rust crate, no bridge.  Bytes cross as
+// `vector<u8>` buffers this side sizes (a pointer and, where the C signature has one, a
+// count); each entry answers 1 for success and 0 for a refusal.  Base64 and hex are loft's,
+// below.
 
-fn sha256_native(data: text) -> text;
-#native "n_sha256"
-#pure
+fn c_sha256_text(data: text, out: vector<u8>) -> integer;
+#c "cr_sha256_text" "int(const char*, void*)"
+fn c_sha256(data: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_sha256" "int(const void*, int64_t, void*)"
+fn c_hmac_sha256_text(key: text, data: text, out: vector<u8>) -> integer;
+#c "cr_hmac_sha256_text" "int(const char*, const char*, void*)"
+fn c_hkdf_extract(salt: const vector<u8>, ikm: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_hkdf_extract" "int(const void*, int64_t, const void*, int64_t, void*)"
+fn c_hkdf_expand(prk: const vector<u8>, info: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_hkdf_expand" "int(const void*, int64_t, const void*, int64_t, void*, int64_t)"
+fn c_hkdf(salt: const vector<u8>, ikm: const vector<u8>, info: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_hkdf" "int(const void*, int64_t, const void*, int64_t, const void*, int64_t, void*, int64_t)"
+fn c_aes256gcm(encrypt: integer, key: const vector<u8>, nonce: const vector<u8>, aad: const vector<u8>, buf: vector<u8>, tag: vector<u8>) -> integer;
+#c "cr_aes256gcm" "int(int, const void*, const void*, const void*, int64_t, void*, int64_t, void*)"
+fn c_x25519(secret: const vector<u8>, public: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_x25519" "int(const void*, const void*, void*)"
+fn c_ed25519_public_key(seed: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_ed25519_public_key" "int(const void*, void*)"
+fn c_ed25519_sign(seed: const vector<u8>, message: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_ed25519_sign" "int(const void*, const void*, int64_t, void*)"
+fn c_ed25519_verify(public: const vector<u8>, message: const vector<u8>, signature: const vector<u8>) -> boolean;
+#c "cr_ed25519_verify" "int(const void*, const void*, int64_t, const void*)"
+fn c_p256_scalar_ok(d: const vector<u8>) -> boolean;
+#c "cr_p256_scalar_ok" "int(const void*)"
+fn c_p256_public_key(d: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_p256_public_key" "int(const void*, void*)"
+fn c_p256_sign(d: const vector<u8>, message: const vector<u8>, out: vector<u8>) -> integer;
+#c "cr_p256_sign" "int(const void*, const void*, int64_t, void*)"
+fn c_p256_verify(xy: const vector<u8>, message: const vector<u8>, signature: const vector<u8>) -> boolean;
+#c "cr_p256_verify" "int(const void*, const void*, int64_t, const void*)"
+fn c_random(out: vector<u8>) -> integer;
+#c "cr_random" "int(void*, int64_t)"
 
-fn sha256_b64_native(data_b64: text) -> text;
-#native "n_sha256_b64"
-#pure
+// --- Bytes, base64 and hex, in loft ---
 
-fn hmac_sha256_native(key: text, data: text) -> text;
-#native "n_hmac_sha256"
-#pure
+// `n` zero bytes: the buffer a C entry point fills.
+fn zeros(n: integer) -> vector<u8> {
+  [for _ in 0..n { 0 }]
+}
 
-fn base64_encode_native(data: text) -> text;
-#native "n_base64_encode"
-#pure
+// The UTF-8 bytes of a text.
+fn text_bytes(t: text) -> vector<u8> {
+  [for i in 0..size(t) { t.byte_at(i) }]
+}
 
-fn base64_decode_native(data: text) -> text;
-#native "n_base64_decode"
-#pure
+// Lowercase hex of a byte vector.
+fn hex(bytes: const vector<u8>) -> text {
+  digits = "0123456789abcdef";
+  out = "";
+  for b in bytes {
+    hi = b / 16 ?? 0;
+    lo = b % 16 ?? 0;
+    out += digits[hi..hi + 1];
+    out += digits[lo..lo + 1];
+  }
+  out
+}
 
-fn base64url_encode_native(data: text) -> text;
-#native "n_base64url_encode"
-#pure
+// Standard base64 with padding (RFC 4648 § 4).
+fn b64_encode(bytes: const vector<u8>) -> text {
+  chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  out = "";
+  n = len(bytes);
+  i = 0;
+  while i < n {
+    b0 = bytes[i] ?? 0;
+    b1 = if i + 1 < n { bytes[i + 1] ?? 0 } else { 0 };
+    b2 = if i + 2 < n { bytes[i + 2] ?? 0 } else { 0 };
+    v = b0 * 65536 + b1 * 256 + b2;
+    c0 = (v / 262144 ?? 0) % 64 ?? 0;
+    c1 = (v / 4096 ?? 0) % 64 ?? 0;
+    c2 = (v / 64 ?? 0) % 64 ?? 0;
+    c3 = v % 64 ?? 0;
+    out += chars[c0..c0 + 1];
+    out += chars[c1..c1 + 1];
+    out += if i + 1 < n { chars[c2..c2 + 1] } else { "=" };
+    out += if i + 2 < n { chars[c3..c3 + 1] } else { "=" };
+    i += 3;
+  }
+  out
+}
 
-fn ed25519_public_key_native(secret_key_b64: text) -> text;
-#native "n_ed25519_public_key"
-#pure
+// Base64url without padding (RFC 4648 § 5), as JWTs spell it.
+fn b64url_encode(bytes: const vector<u8>) -> text {
+  out = "";
+  for c in b64_encode(bytes) {
+    if c == '+' { out += "-"; }
+    else if c == '/' { out += "_"; }
+    else if c != '=' { out += "{c}"; }
+  }
+  out
+}
 
-fn ed25519_sign_native(secret_key_b64: text, message_b64: text) -> text;
-#native "n_ed25519_sign"
-#pure
+// The value of one base64 character, both alphabets; -1 for anything else.
+fn b64_value(c: integer) -> integer {
+  if c >= 65 && c <= 90 { return c - 65; }
+  if c >= 97 && c <= 122 { return c - 97 + 26; }
+  if c >= 48 && c <= 57 { return c - 48 + 52; }
+  if c == 43 || c == 45 { return 62; }
+  if c == 47 || c == 95 { return 63; }
+  -1
+}
 
-fn ed25519_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
-#native "n_ed25519_verify"
-#pure
+// Standard or url-safe base64 decoded, padded or not, line breaks ignored: null when the text
+// is not base64 (a stray character, padding that does not fill a quartet, a lone trailing
+// sextet).  The rule the Rust part applied, so every caller's refusal stays where it was.
+fn b64_decode(b64: text) -> vector<u8>? {
+  vals: vector<integer> = [];
+  pad = 0;
+  for i in 0..size(b64) {
+    c = b64.byte_at(i);
+    if c == 10 || c == 13 { continue; }
+    if c == 61 { pad += 1; continue; }
+    if pad > 0 { return null; }
+    v = b64_value(c);
+    if v < 0 { return null; }
+    vals += [v];
+  }
+  n = len(vals);
+  if pad > 2 || (pad > 0 && (n + pad) % 4 != 0) || n % 4 == 1 { return null; }
+  out: vector<u8> = [];
+  i = 0;
+  while i < n {
+    v0 = vals[i] ?? 0;
+    v1 = if i + 1 < n { vals[i + 1] ?? 0 } else { 0 };
+    v2 = if i + 2 < n { vals[i + 2] ?? 0 } else { 0 };
+    v3 = if i + 3 < n { vals[i + 3] ?? 0 } else { 0 };
+    v = v0 * 262144 + v1 * 4096 + v2 * 64 + v3;
+    out += [(v / 65536 ?? 0) % 256 ?? 0];
+    if i + 2 < n { out += [(v / 256 ?? 0) % 256 ?? 0]; }
+    if i + 3 < n { out += [v % 256 ?? 0]; }
+    i += 4;
+  }
+  out
+}
 
-fn ecdsa_p256_keygen_native() -> text;
-#native "n_ecdsa_p256_keygen"
-
-fn ecdsa_p256_public_key_native(secret_key_b64: text) -> text;
-#native "n_ecdsa_p256_public_key"
-#pure
-
-fn ecdsa_p256_sign_native(secret_key_b64: text, message_b64: text) -> text;
-#native "n_ecdsa_p256_sign"
-#pure
-
-fn ecdsa_p256_verify_native(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean;
-#native "n_ecdsa_p256_verify"
-#pure
-
-fn x25519_dh_native(secret_key_b64: text, public_key_b64: text) -> text;
-#native "n_x25519_dh"
-#pure
-
-fn hkdf_sha256_native(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text;
-#native "n_hkdf_sha256"
-#pure
-
-fn hkdf_extract_native(salt_b64: text, ikm_b64: text) -> text;
-#native "n_hkdf_extract"
-#pure
-
-fn hkdf_expand_native(prk_b64: text, info_b64: text, length: integer) -> text;
-#native "n_hkdf_expand"
-#pure
-
-fn bytes_to_base64_native(bytes: vector<u8>) -> text;
-#native "n_bytes_to_base64"
-#pure
-
-fn base64_to_bytes_native(b64: text) -> vector<u8>;
-#native "n_base64_to_bytes"
-#pure
-
-fn bytes_concat_b64_native(a_b64: text, b_b64: text) -> text;
-#native "n_bytes_concat_b64"
-#pure
-
-fn aes256gcm_seal_native(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text;
-#native "n_aes256gcm_seal"
-#pure
-
-fn aes256gcm_open_native(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text;
-#native "n_aes256gcm_open"
-#pure
-
-fn random_bytes_native(length: integer) -> text;
-#native "n_random_bytes"
+// Base64 decoded to exactly `n` bytes, or null: a key, a nonce or a signature of the wrong
+// length is refused whole.
+fn b64_fixed(b64: text, n: integer) -> vector<u8>? {
+  bytes = b64_decode(b64);
+  if bytes == null { return null; }
+  if len(bytes) != n { return null; }
+  bytes
+}
 
 // --- Public API ---
 
 // SHA-256 hash of a string. Returns 64-char hex string.
 pub fn sha256(data: text) -> text {
-  sha256_native(data)
+  out = zeros(32);
+  c_sha256_text(data, out);
+  hex(out)
 }
 
 // SHA-256 of the RAW BYTES decoded from base64 `data_b64`. Returns base64 of the
@@ -123,28 +181,36 @@ pub fn sha256(data: text) -> text {
 // be passed to `sha256` as text.
 // Example: @CRY-001 — the two hashing doors: text in / hex out vs base64 both ways.
 pub fn sha256_b64(data_b64: text) -> text {
-  sha256_b64_native(data_b64)
+  bytes = b64_decode(data_b64);
+  if bytes == null { return ""; }
+  out = zeros(32);
+  c_sha256(bytes, out);
+  b64_encode(out)
 }
 
 // HMAC-SHA256 of data with key. Returns 64-char hex string.
 pub fn hmac_sha256(key: text, data: text) -> text {
-  hmac_sha256_native(key, data)
+  out = zeros(32);
+  c_hmac_sha256_text(key, data, out);
+  hex(out)
 }
 
 // Base64 encode a string.
 pub fn base64_encode(data: text) -> text {
-  base64_encode_native(data)
+  b64_encode(text_bytes(data))
 }
 
 // Base64 decode to text.  "" when `data` is not base64, or when its bytes are not
 // UTF-8 — those are not text; `base64_to_bytes` reads them.
 pub fn base64_decode(data: text) -> text {
-  base64_decode_native(data)
+  bytes = b64_decode(data);
+  if bytes == null { return ""; }
+  text_from_bytes(bytes)
 }
 
 // Base64url encode (JWT-safe, no padding).
 pub fn base64url_encode(data: text) -> text {
-  base64url_encode_native(data)
+  b64url_encode(text_bytes(data))
 }
 
 // --- Ed25519 signatures (RFC 8032) ---
@@ -157,21 +223,37 @@ pub fn base64url_encode(data: text) -> text {
 
 // Derive the 32-byte public key (base64) from a 32-byte secret seed (base64).
 pub fn ed25519_public_key(secret_key_b64: text) -> text {
-  ed25519_public_key_native(secret_key_b64)
+  seed = b64_fixed(secret_key_b64, 32);
+  if seed == null { return ""; }
+  out = zeros(32);
+  c_ed25519_public_key(seed, out);
+  b64_encode(out)
 }
 
 // Sign the base64 `message` bytes with the 32-byte secret seed (base64).
 // Returns the 64-byte signature, base64.
 // Example: @CRY-002 — sign `base64_encode(msg)`; the bare text signs other bytes, silently.
 pub fn ed25519_sign(secret_key_b64: text, message_b64: text) -> text {
-  ed25519_sign_native(secret_key_b64, message_b64)
+  seed = b64_fixed(secret_key_b64, 32);
+  if seed == null { return ""; }
+  message = b64_decode(message_b64);
+  if message == null { return ""; }
+  out = zeros(64);
+  c_ed25519_sign(seed, message, out);
+  b64_encode(out)
 }
 
 // Verify a signature over the base64 `message` bytes under a public key.
 // Returns true iff the signature is valid.
 // Example: @CRY-002 — why a wrongly-spelled message still verifies against itself.
 pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean {
-  ed25519_verify_native(public_key_b64, message_b64, signature_b64)
+  public = b64_fixed(public_key_b64, 32);
+  if public == null { return false; }
+  signature = b64_fixed(signature_b64, 64);
+  if signature == null { return false; }
+  message = b64_decode(message_b64);
+  if message == null { return false; }
+  c_ed25519_verify(public, message, signature)
 }
 
 // --- ES256 signatures (ECDSA P-256 / SHA-256, JOSE `alg: ES256`) ---
@@ -188,26 +270,49 @@ pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: te
 
 // Generate a fresh 32-byte P-256 secret scalar (base64) from the OS CSPRNG.
 pub fn ecdsa_p256_keygen() -> text {
-  ecdsa_p256_keygen_native()
+  seed = zeros(32);
+  if c_random(seed) == 0 { return ""; }
+  if c_p256_scalar_ok(seed) { return b64_encode(seed); }
+  // A seed outside the group order is hashed into it, as the Rust part did.
+  d = zeros(32);
+  c_sha256(seed, d);
+  if c_p256_scalar_ok(d) { return b64_encode(d); }
+  ""
 }
 
 // Derive the 64-byte public key `x || y` (base64) from a 32-byte secret scalar (base64).
 // Example: @CRY-003 — the three JOSE lengths (32 / 64 / 64) a caller should check.
 pub fn ecdsa_p256_public_key(secret_key_b64: text) -> text {
-  ecdsa_p256_public_key_native(secret_key_b64)
+  d = b64_fixed(secret_key_b64, 32);
+  if d == null { return ""; }
+  out = zeros(64);
+  if c_p256_public_key(d, out) == 0 { return ""; }
+  b64_encode(out)
 }
 
 // Sign the base64 `message` bytes with the 32-byte secret scalar (base64).
 // Returns the 64-byte `r || s` signature (base64), deterministic per RFC 6979.
 // Example: @CRY-003 — signing twice answers identical bytes, and `r || s` is not DER.
 pub fn ecdsa_p256_sign(secret_key_b64: text, message_b64: text) -> text {
-  ecdsa_p256_sign_native(secret_key_b64, message_b64)
+  d = b64_fixed(secret_key_b64, 32);
+  if d == null { return ""; }
+  message = b64_decode(message_b64);
+  if message == null { return ""; }
+  out = zeros(64);
+  if c_p256_sign(d, message, out) == 0 { return ""; }
+  b64_encode(out)
 }
 
 // Verify an ES256 signature (64-byte `r || s`) over the base64 `message` bytes
 // under a 64-byte `x || y` public key.  Returns true iff the signature is valid.
 pub fn ecdsa_p256_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean {
-  ecdsa_p256_verify_native(public_key_b64, message_b64, signature_b64)
+  xy = b64_fixed(public_key_b64, 64);
+  if xy == null { return false; }
+  signature = b64_fixed(signature_b64, 64);
+  if signature == null { return false; }
+  message = b64_decode(message_b64);
+  if message == null { return false; }
+  c_p256_verify(xy, message, signature)
 }
 
 // --- X25519 key agreement (RFC 7748) ---
@@ -219,7 +324,13 @@ pub fn ecdsa_p256_verify(public_key_b64: text, message_b64: text, signature_b64:
 // Example: @CRY-004 — the DH output is keying material, not a key; and how to get a
 // public key out of a secret scalar (X25519 has no separate keygen).
 pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text {
-  x25519_dh_native(secret_key_b64, public_key_b64)
+  secret = b64_fixed(secret_key_b64, 32);
+  if secret == null { return ""; }
+  public = b64_fixed(public_key_b64, 32);
+  if public == null { return ""; }
+  out = zeros(32);
+  if c_x25519(secret, public, out) == 0 { return ""; }
+  b64_encode(out)
 }
 
 // --- HKDF-SHA256 key derivation (RFC 5869) ---
@@ -230,7 +341,16 @@ pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text {
 // argument is not base64.
 // Example: @CRY-004 — `info` is what separates two keys from one shared secret.
 pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text {
-  hkdf_sha256_native(salt_b64, ikm_b64, info_b64, length)
+  if length <= 0 || length > 8160 { return ""; }
+  salt = b64_decode(salt_b64);
+  ikm = b64_decode(ikm_b64);
+  info = b64_decode(info_b64);
+  if salt == null { return ""; }
+  if ikm == null { return ""; }
+  if info == null { return ""; }
+  out = zeros(length);
+  if c_hkdf(salt, ikm, info, out) == 0 { return ""; }
+  b64_encode(out)
 }
 
 // HKDF-Extract (RFC 5869 §2.2): the 32-byte PRK (base64) HMAC-SHA256(salt, ikm).
@@ -240,14 +360,28 @@ pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: intege
 // Expands or when an Extract output is itself the value you want (e.g. HPKE).
 // Example: @CRY-004 — the split halves compose to exactly `hkdf_sha256`.
 pub fn hkdf_extract(salt_b64: text, ikm_b64: text) -> text {
-  hkdf_extract_native(salt_b64, ikm_b64)
+  salt = b64_decode(salt_b64);
+  ikm = b64_decode(ikm_b64);
+  if salt == null { return ""; }
+  if ikm == null { return ""; }
+  out = zeros(32);
+  c_hkdf_extract(salt, ikm, out);
+  b64_encode(out)
 }
 
 // HKDF-Expand (RFC 5869 §2.3) from an existing 32-byte PRK.  Returns `length`
 // bytes of OKM (base64), or "" on a short PRK, length > 255*32, length <= 0, or
 // an argument that is not base64.
 pub fn hkdf_expand(prk_b64: text, info_b64: text, length: integer) -> text {
-  hkdf_expand_native(prk_b64, info_b64, length)
+  if length <= 0 || length > 8160 { return ""; }
+  prk = b64_decode(prk_b64);
+  info = b64_decode(info_b64);
+  if prk == null { return ""; }
+  if info == null { return ""; }
+  if len(prk) < 32 { return ""; }
+  out = zeros(length);
+  if c_hkdf_expand(prk, info, out) == 0 { return ""; }
+  b64_encode(out)
 }
 
 // --- Raw bytes <-> base64 ---
@@ -259,13 +393,13 @@ pub fn hkdf_expand(prk_b64: text, info_b64: text, length: integer) -> text {
 
 // Standard base64 of a raw byte vector.  Empty vector -> "".
 pub fn bytes_to_base64(bytes: vector<u8>) -> text {
-  bytes_to_base64_native(bytes)
+  b64_encode(bytes)
 }
 
 // Raw bytes from standard base64.  Input that is not base64, or empty, -> empty vector.
 // Example: @CRY-001 — reading a decoded byte vector, and hashing non-UTF-8 bytes.
 pub fn base64_to_bytes(b64: text) -> vector<u8> {
-  base64_to_bytes_native(b64)
+  b64_decode(b64) ?? []
 }
 
 // --- AES-256-GCM authenticated encryption ---
@@ -279,7 +413,18 @@ pub fn base64_to_bytes(b64: text) -> vector<u8> {
 // key/nonce length or an argument that is not base64.
 // Example: @CRY-005 — the tag rides in the blob, and a fresh nonce per message.
 pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text {
-  aes256gcm_seal_native(key_b64, nonce_b64, aad_b64, plaintext_b64)
+  key = b64_fixed(key_b64, 32);
+  nonce = b64_fixed(nonce_b64, 12);
+  if key == null { return ""; }
+  if nonce == null { return ""; }
+  aad = b64_decode(aad_b64);
+  buf = b64_decode(plaintext_b64);
+  if aad == null { return ""; }
+  if buf == null { return ""; }
+  tag = zeros(16);
+  c_aes256gcm(1, key, nonce, aad, buf, tag);
+  buf += tag;
+  b64_encode(buf ?? [])
 }
 
 // Verify + decrypt `ciphertext` (ciphertext||tag, base64) under `key`/`nonce`,
@@ -287,7 +432,20 @@ pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b
 // failure — an empty result means the ciphertext/tag/aad did not verify.
 // Example: @CRY-005 — "" is a failure signal, and an authentic empty plaintext gives it too.
 pub fn aes256gcm_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text {
-  aes256gcm_open_native(key_b64, nonce_b64, aad_b64, ciphertext_b64)
+  key = b64_fixed(key_b64, 32);
+  nonce = b64_fixed(nonce_b64, 12);
+  if key == null { return ""; }
+  if nonce == null { return ""; }
+  aad = b64_decode(aad_b64);
+  ct = b64_decode(ciphertext_b64);
+  if aad == null { return ""; }
+  if ct == null { return ""; }
+  n = len(ct);
+  if n < 16 { return ""; }
+  buf = ct[0..n - 16];
+  tag = ct[n - 16..n];
+  if c_aes256gcm(0, key, nonce, aad, buf, tag) == 0 { return ""; }
+  b64_encode(buf)
 }
 
 // --- CSPRNG ---
@@ -295,7 +453,10 @@ pub fn aes256gcm_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_
 // Return `length` cryptographically secure random bytes (base64) from the OS
 // RNG.  Returns "" for length <= 0.  Use for keys (32), nonces (12), salts.
 pub fn random_bytes(length: integer) -> text {
-  random_bytes_native(length)
+  if length <= 0 { return ""; }
+  out = zeros(length);
+  if c_random(out) == 0 { return ""; }
+  b64_encode(out)
 }
 
 
@@ -320,13 +481,18 @@ pub fn random_bytes(length: integer) -> text {
 
 // base64(bytes(a) || bytes(b)) — concatenate two base64 byte strings.
 fn concat(a_b64: text, b_b64: text) -> text {
-  bytes_concat_b64_native(a_b64, b_b64)
+  a = b64_decode(a_b64);
+  b = b64_decode(b_b64);
+  if a == null { return ""; }
+  if b == null { return ""; }
+  a += b;
+  b64_encode(a ?? [])
 }
 
 // An ASCII label as a base64 byte string (ASCII is valid UTF-8, so this is the
 // plain text base64 encoder).
 fn label_b64(s: text) -> text {
-  base64_encode_native(s)
+  b64_encode(text_bytes(s))
 }
 
 // I2OSP(n, 2) as base64: the 2-byte big-endian encoding of `n` (RFC 8017).
