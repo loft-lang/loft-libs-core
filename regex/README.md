@@ -5,9 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # regex — regular expressions for loft
 
-Inline regular expressions backed by the Rust
-[`regex`](https://crates.io/crates/regex) crate: linear-time matching,
-ReDoS-safe by construction (no catastrophic backtracking).
+Inline regular expressions over an engine of the library's own, in C99
+(`c/regex.c`): the Rust `regex` crate's syntax and leftmost-first semantics —
+groups, named groups, alternation, greedy and lazy quantifiers, classes, `\d
+\w \s` and `\p{L}` over Unicode, `^ $ \b`, `(?i)` — matched by backtracking
+with a step bound, so a pathological pattern ends in a miss rather than running
+away.  loft builds the engine with `cc` as the package's `[c] shim`; no Rust
+crate and no rustc, one source for the interpreter, `--native` and the C
+backend.
 
 Deliberately minimal — this is the **small-script** text tool (log
 scanning, CLI fields, quick extraction).  You pass the pattern inline;
@@ -97,7 +102,9 @@ callback, `@RGX-008` a replacement template is not a format string.
 
 ## Provenance
 
-Native crate `loft_regex` wraps the Rust `regex` crate — the same shape
-as this chunk's `random` (wraps `rand_pcg`) and `crypto` (wraps the pure-Rust
-RustCrypto and dalek crates).  Built directly in `loft-libs-core` rather than extracted
-from the monorepo.
+Up to 0.5 a native crate `loft_regex` wrapped the Rust `regex` crate; since
+0.6.0 the engine is `c/regex.c`, a backtracking matcher with the crate's
+semantics (measured against the crate on this suite), bound by `#c`
+declarations and built by loft itself.  The replacement template (`$1`,
+`${name}`, `$$`) is expanded in loft.  Built directly in `loft-libs-core`
+rather than extracted from the monorepo.
