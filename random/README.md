@@ -7,8 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 Two tiers, and choosing between them is the whole decision:
 
-- **The global tier** (`rand` / `rand_seed` / `rand_indices`) — one PCG-64
-  generator per thread, seeded with `12345` at startup.  Shared by every call
+- **The global tier** (`rand` / `rand_seed` / `rand_indices` / `rand_below`) — one
+  PCG-64 generator per process, seeded with `12345` at startup.  Shared by every call
   site in the process, so `rand_seed(N)` fixes what the *generator* produces,
   not what *you* receive.  Right for casual randomness.
 - **The value tier** (`RandStream`) — an independent, deterministic stream you
@@ -28,7 +28,8 @@ loft install random
 | Function | Returns | Notes |
 |---|---|---|
 | `rand(lo: integer, hi: integer) -> integer?` | uniform integer in `[lo, hi]` (inclusive) | returns `null` if `lo > hi` or either bound is null |
-| `rand_seed(seed: integer)` | — | reseed the thread-local PRNG deterministically |
+| `rand_seed(seed: integer)` | — | reseed the shared PRNG deterministically |
+| `rand_below(m: integer) -> integer` | the next draw in `[0, m)` | the shuffle's step; `0` for `m < 1` |
 | `rand_indices(n: integer) -> vector<integer>` | `[0..n)` in random order | Fisher-Yates shuffle; returns empty for `n <= 0` |
 | `seed_stream(seed: integer) -> RandStream` | an owned stream | any seed is valid, negative and zero included |
 | `r.get(lo, hi) -> integer?` | uniform integer in `[lo, hi]` from **this** stream | advances it; `null` if `lo > hi` |
@@ -70,7 +71,11 @@ moves the stream, a shuffle of `n` included (exactly `n - 1` of them).
 
 Extracted from the loft monorepo's `lib/random/` 2026-05-24 as the
 **showcase library extraction** for `LoftStore`-forwarding native
-codegen (@PLAN12 phase 3.5a).  Native crate `loft_random` links
-against `rand_pcg` + `rand_core`.  Single source of RNG state for
-both interpreter (dlopen dispatch) and `--native` (codegen via
-`loft::native_call::build_store`).
+codegen (@PLAN12 phase 3.5a).  Since 0.4.0 the native part is **C99**
+(`c/random.c`, built by loft itself with `cc` as a `[c] shim` and bound by
+`#c` declarations): PCG64 (XSL RR 128/64) seeded as `rand_core`'s
+`seed_from_u64` seeds it, so a program seeded under 0.3 draws the same
+sequence.  No Rust crate and no rustc; one source for the interpreter,
+`--native` and the C backend.  C99 has no threads, so the generator is one
+per process (0.3 kept one per thread): a `par` worker drawing from the
+global tier shares it with the others.

@@ -1,22 +1,14 @@
 [package]
 name = "random"
-version = "0.3.6"
+version = "0.4.0"
 loft = ">=2026.10.0"
 
 api_compatible_with  = "0.3.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.3.0"   # oldest own release whose stored data this reads
 [library]
 entry = "src/random.loft"
-native = "loft_random"
 
-[native]
-crate = "loft-random"
-
-# @PLAN12 Phase 6r (2026-05-29) — the `[native.functions]` manifest
-# is superseded by the clean source-scan pattern: `native/build.rs`
-# scans `src/*.loft` for bare `#native` annotations and generates the
-# `loft_register!` list at compile time.  Defining a native function
-# IS registering it — no parallel table to keep in sync.  See
-# `native/build.rs` and the canonical reference at
-# jjstwerff/loft `doc/claude/lib_plans/12-library-extraction/REFERENCE.md`
-# § Clean libraries — the principle.
+# The native part is C99, built by loft itself with `cc` — no Rust crate, no rustc.  The
+# `#c` declarations in src/random.loft bind its symbols (PACKAGES_C_BINDING.md).
+[c]
+shim = "c/random.c"

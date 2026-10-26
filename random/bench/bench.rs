@@ -8,7 +8,7 @@
 //
 //     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs && bench/.build/stats_rs --n 50
 //
-// `rand` and `rand_indices` port the native crate (native/src/lib.rs): `rand_pcg`'s Pcg64
+// `rand` and `rand_indices` port the C part (c/random.c): `rand_pcg`'s Pcg64
 // (a 128-bit LCG with the XSL-RR output), seeded through `rand_core`'s `seed_from_u64`,
 // reduced with `%` exactly as the crate reduces it.  Here the generator is an owned value
 // called directly, so the loft/Rust ratio of those rows is the cost of the crossing.
