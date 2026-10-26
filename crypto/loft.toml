@@ -1,6 +1,6 @@
 [package]
 name = "crypto"
-version = "0.3.14"
+version = "0.4.0"
 loft = ">=2026.10.0"
 api_compatible_with  = "0.3.2"   # oldest own release this is a drop-in for
 data_compatible_with = "0.3.2"   # oldest own release whose stored data this reads
@@ -8,56 +8,10 @@ repository = "loft-libs-core"
 
 [library]
 entry = "src/crypto.loft"
-native = "loft_crypto"
 
-[native]
-crate = "loft-crypto"
-
-# Native `n_*` symbols are declared by co-located `#native "n_*"` annotations
-# in `src/crypto.loft` (scanned by `loft-ffi-build`), so the register list
-# lives in exactly one place — no `[native.functions]` table to drift.
-
-# Browser-WASM bridge for `loft --html`.  Each routed `#native` runs through the
-# `wasm/` bridge crate's pure-Rust entry point, with NO Reference-out reshape for
-# text returns (loft #407 — the clean text-return bridge convention).  Hashing +
-# base64 share the native crate's zero-dep modules (native == wasm by construction);
-# HKDF is a pure-Rust RFC-5869 re-impl over the shared HMAC.
-[wasm.bridge]
-crate = "crypto-wasm"
-host_js = "wasm/host.js"
-
-[wasm.bridge.routes]
-# Hashing + base64 — shared zero-dep modules (native == wasm by construction).
-n_sha256 = "crypto_sha256"
-n_sha256_b64 = "crypto_sha256_b64"
-n_hmac_sha256 = "crypto_hmac_sha256"
-n_base64_encode = "crypto_base64_encode"
-n_base64_decode = "crypto_base64_decode"
-n_base64url_encode = "crypto_base64url_encode"
-# Raw-byte <-> base64 (the ztcbor signing/hashing path).  The two vector<u8>
-# bridges read / allocate the byte vector in the in-process loft store (stride 1,
-# the Stores::fs_read_bytes / fs_write_bytes layout); bytes_concat_b64 is text-only.
-n_bytes_to_base64 = "crypto_bytes_to_base64"
-n_base64_to_bytes = "crypto_base64_to_bytes"
-n_bytes_concat_b64 = "crypto_bytes_concat_b64"
-# HKDF-SHA256 — pure-loft-safe re-impl over the shared hmac_sha256, RFC-5869-pinned.
-n_hkdf_sha256 = "crypto_hkdf_sha256"
-n_hkdf_extract = "crypto_hkdf_extract"
-n_hkdf_expand = "crypto_hkdf_expand"
-# Ed25519 / X25519 / AES-256-GCM — SHARED dalek/RustCrypto modules, compiled to
-# wasm via the build-extension (`-L dependency` from this crate's Cargo deps).
-n_ed25519_public_key = "crypto_ed25519_public_key"
-n_ed25519_sign = "crypto_ed25519_sign"
-n_ed25519_verify = "crypto_ed25519_verify"
-# ES256 (ECDSA P-256) — sign/verify/public_key are deterministic (shared es256.rs,
-# native == wasm by construction); keygen reuses the random_fill host import.
-n_ecdsa_p256_keygen = "crypto_ecdsa_p256_keygen"
-n_ecdsa_p256_public_key = "crypto_ecdsa_p256_public_key"
-n_ecdsa_p256_sign = "crypto_ecdsa_p256_sign"
-n_ecdsa_p256_verify = "crypto_ecdsa_p256_verify"
-n_x25519_dh = "crypto_x25519_dh"
-n_aes256gcm_seal = "crypto_aes256gcm_seal"
-n_aes256gcm_open = "crypto_aes256gcm_open"
-# random_bytes — the one HOST-IMPORT bridge: OS entropy via the synchronous
-# crypto.getRandomValues (host.js `loft_crypto.random_fill`).
-n_random_bytes = "crypto_random_bytes"
+# The native part is C99 the package ships and loft builds itself with `cc` (and with
+# `clang` for the two wasm targets): `c/crypto_glue.c` over the vendored, audited BearSSL
+# (`c/vendor/bearssl`, MIT) and Monocypher (`c/vendor/monocypher`, BSD-2 / CC0), bound by
+# the `#c` declarations in src/crypto.loft.  No Rust crate, no rustc, no wasm bridge.
+[c]
+shim = "c/crypto_glue.c, c/vendor/bearssl/aes_ct.c, c/vendor/bearssl/aes_ct_ctr.c, c/vendor/bearssl/aes_ct_dec.c, c/vendor/bearssl/aes_ct_enc.c, c/vendor/bearssl/ccopy.c, c/vendor/bearssl/dec32be.c, c/vendor/bearssl/dec32le.c, c/vendor/bearssl/dec64be.c, c/vendor/bearssl/dec64le.c, c/vendor/bearssl/ec_c25519_m31.c, c/vendor/bearssl/ec_p256_m31.c, c/vendor/bearssl/ec_secp256r1.c, c/vendor/bearssl/ec_secp384r1.c, c/vendor/bearssl/ec_secp521r1.c, c/vendor/bearssl/ecdsa_i31_bits.c, c/vendor/bearssl/ecdsa_i31_sign_raw.c, c/vendor/bearssl/ecdsa_i31_vrfy_raw.c, c/vendor/bearssl/enc32be.c, c/vendor/bearssl/enc32le.c, c/vendor/bearssl/enc64be.c, c/vendor/bearssl/enc64le.c, c/vendor/bearssl/gcm.c, c/vendor/bearssl/ghash_ctmul32.c, c/vendor/bearssl/hkdf.c, c/vendor/bearssl/hmac.c, c/vendor/bearssl/hmac_drbg.c, c/vendor/bearssl/i31_add.c, c/vendor/bearssl/i31_bitlen.c, c/vendor/bearssl/i31_decmod.c, c/vendor/bearssl/i31_decode.c, c/vendor/bearssl/i31_decred.c, c/vendor/bearssl/i31_encode.c, c/vendor/bearssl/i31_fmont.c, c/vendor/bearssl/i31_iszero.c, c/vendor/bearssl/i31_moddiv.c, c/vendor/bearssl/i31_modpow.c, c/vendor/bearssl/i31_montmul.c, c/vendor/bearssl/i31_mulacc.c, c/vendor/bearssl/i31_muladd.c, c/vendor/bearssl/i31_ninv31.c, c/vendor/bearssl/i31_reduce.c, c/vendor/bearssl/i31_rshift.c, c/vendor/bearssl/i31_sub.c, c/vendor/bearssl/i31_tmont.c, c/vendor/bearssl/i32_div32.c, c/vendor/bearssl/sha2small.c, c/vendor/monocypher/monocypher.c, c/vendor/monocypher/monocypher-ed25519.c"

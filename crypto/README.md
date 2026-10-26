@@ -9,12 +9,17 @@ SHA-256, HMAC-SHA-256, base64 / base64url, X25519 key agreement (RFC 7748),
 Ed25519 signatures (RFC 8032), ES256 / ECDSA-P256 signatures (RFC 7518, the
 JOSE / ACME signature), AES-256-GCM authenticated encryption, HKDF-SHA256
 (RFC 5869), HPKE base mode (RFC 9180), and OS-CSPRNG random bytes.
-Pure-Rust implementations exported through the loft FFI: the hashing / base64
-primitives are dependency-free; the curve, AEAD, and KDF primitives wrap the
-vetted dalek / RustCrypto crates (no openssl / ring, so the cdylib
-cross-compiles without a C toolchain).  Every primitive also runs in the
-**browser** through the `[wasm.bridge]` — `loft … --html` produces a
-self-contained page with no server-side crypto.
+The primitives are two vendored, audited C libraries the package ships and
+loft builds itself as its `[c] shim`: [BearSSL](https://bearssl.org) (MIT —
+SHA-256, HMAC, HKDF, AES-256-GCM, P-256 ECDSA with RFC 6979 nonces, X25519,
+constant-time throughout; the subset under `c/vendor/bearssl`) and
+[Monocypher](https://monocypher.org) (BSD-2 / CC0 — Ed25519, under
+`c/vendor/monocypher`), behind the one-call entry points of `c/crypto_glue.c`.
+Base64, hex and the one-call API are loft.  No Rust crate and no rustc: `cc`
+builds the shim for the host, `clang` builds it for `--native-wasm` and the
+**browser** (`--html`), where every primitive runs from the same C source — all
+but the two that draw entropy (`random_bytes`, `ecdsa_p256_keygen`), which
+answer `""` on a wasm target: a module has no entropy source of its own.
 
 ## Install
 
@@ -117,11 +122,11 @@ proven byte-identical on `--native-wasm` and `--html` via `tests/es256_parity.lo
 git clone https://github.com/loft-lang/loft-libs-core
 cd loft-libs-core/crypto
 loft --interpret test    # run the suite on the interpreter
-loft --native test       # and on compiled Rust — results must match
+loft test --native       # and compiled — results must match
 ```
 
-The cdylib in `native/` (and the `wasm/` bridge for `--html`) is built on demand
-by the runner; no separate `cargo build` step.
+The `[c] shim` (`c/crypto_glue.c` and the vendored sources, listed in
+`loft.toml`) is built on demand by the runner with `cc`; no separate build step.
 
 ## Releasing
 
