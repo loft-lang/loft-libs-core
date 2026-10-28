@@ -3,9 +3,9 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# random — PRNGs for loft, in two tiers
+# random — PRNGs for loft, in three tiers
 
-Two tiers, and choosing between them is the whole decision:
+Three tiers, and choosing between them is the whole decision:
 
 - **The global tier** (`rand` / `rand_seed` / `rand_indices` / `rand_below`) — one
   PCG-64 generator per process, seeded with `12345` at startup.  Shared by every call
@@ -16,6 +16,12 @@ Two tiers, and choosing between them is the whole decision:
   data.  Reach for it the moment reproducibility is a requirement: a replay, a
   lockstep simulation, per-feature streams that must not disturb each other.
   Pure loft (L'Ecuyer's combined LCG, period ~2.3e18) — no native call.
+- **The 32-bit tier** (`Rand32`, `rand32`) — for a 32-bit processor such as the
+  Tanmatsu's ESP32-P4, and for a `#width 32` program: draws that are `i32` and
+  `single` from the start, computed in 32-bit arithmetic (xoshiro128**, with
+  Lemire's multiply-shift for a range: no 128-bit product and no 64-bit
+  remainder, which the global tier pays per draw).  Owned streams and a shared
+  one, as above.  Its own generator: a seed does not reproduce `rand`'s sequence.
 
 ## Install
 
@@ -34,6 +40,13 @@ loft install random
 | `seed_stream(seed: integer) -> RandStream` | an owned stream | any seed is valid, negative and zero included |
 | `r.get(lo, hi) -> integer?` | uniform integer in `[lo, hi]` from **this** stream | advances it; `null` if `lo > hi` |
 | `r.indices(n) -> vector<integer>` | `[0..n)` in random order from **this** stream | advances it by exactly `n - 1` draws |
+| `seed32(seed: integer) -> Rand32` | an owned 32-bit stream | any seed is valid; SplitMix64 spreads it over the state |
+| `r.get32(lo: i32, hi: i32) -> i32?` | uniform `i32` in `[lo, hi]` from **this** stream | unbiased; `null` if `lo > hi` |
+| `r.bits31() -> i32` | 31 random bits, `[0, 2147483647]` | |
+| `r.unit32() -> single` | uniform `single` in `[0, 1)` | 24 random bits, all a single holds |
+| `r.indices32(n: i32) -> vector<i32>` | `[0..n)` in random order from **this** stream | advances it by exactly `n - 1` draws |
+| `rand32(lo: i32, hi: i32) -> i32?` / `rand32_seed(seed)` / `rand32_unit()` | the shared 32-bit generator | seeded with `12345` at startup |
+| `seed_hw() -> integer?` | a seed from the platform's entropy | the hardware generator on ESP-IDF, the OS elsewhere; `null` on the wasm builds — for a run that is **not** to be reproduced |
 
 Two things about a `RandStream` that its type cannot tell you: **assigning one
 copies it** (`r2 = r1` forks — both replay from that point), while **passing one
@@ -56,8 +69,17 @@ fn main() {
     level = random::seed_stream(42);
     room_count = level.get(3, 9);
     deck = level.indices(52);
+
+    // 32-bit: i32 and single draws, cheap on a 32-bit processor.
+    sky = random::seed32(random::seed_hw() ?? 1);
+    star_x = sky.get32(0, 799);
+    twinkle = sky.unit32();
 }
 ```
+
+The 32-bit tier's C part has one platform-dependent section, `seed_hw`'s entropy
+source; every draw is the same computation on every target, so a seed gives the
+same sequence on the interpreter, the C backend, a 32-bit RISC-V and x86.
 
 ## Worked examples
 

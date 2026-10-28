@@ -1,0 +1,111 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Rand32 (the 32-bit tier): xoshiro128** with Lemire's range.  The known answers are those of an
+// independent implementation of the published algorithms (SplitMix64 seeding, xoshiro128**,
+// Lemire's nearly divisionless range) — not of this library's C — so a wrong rotate, constant,
+// byte order or reduction shows here as a different number.
+use random::*;
+
+fn main() {
+  r = random::seed32(7);
+  a = r.bits31();
+  b = r.bits31();
+  assert(a != b, "the stream advances through the receiver");
+}
+
+// seed 7: the first eight dice, and the first four 31-bit draws of a fresh stream.
+fn test_known_dice() {
+  r = random::seed32(7);
+  got = "";
+  for _ in 0..8 { got += "{r.get32(1, 6) ?? 0},"; }
+  assert(got == "3,3,5,6,3,2,5,1,", "seed 7 dice, got {got}");
+}
+
+fn test_known_bits31() {
+  r = random::seed32(7);
+  assert(r.bits31() == 900548384, "first 31-bit draw");
+  assert(r.bits31() == 777162962, "second");
+  assert(r.bits31() == 1496400421, "third");
+  assert(r.bits31() == 1794490270, "fourth");
+}
+
+// The widest range a non-null i32 allows, from a negative seed.
+fn test_known_widest_range() {
+  r = random::seed32(-1);
+  assert(r.get32(-2147483647, 2147483647) == -1669793892, "first");
+  assert(r.get32(-2147483647, 2147483647) == 346514986, "second");
+  assert(r.get32(-2147483647, 2147483647) == -1591787872, "third");
+}
+
+// 24 bits over 2^24: 0.4193505048751831 is 7035369 / 16777216, exact in a single.
+fn test_known_unit() {
+  r = random::seed32(7);
+  u = r.unit32();
+  assert(u == 0.4193505048751831f, "first unit, got {u}");
+  assert(r.unit32() == 0.3618946671485901f, "second");
+}
+
+// The shared generator starts at seed 12345; reseeding replays it.
+fn test_shared_generator() {
+  random::rand32_seed(12345);
+  got = "";
+  for _ in 0..5 { got += "{random::rand32(0, 99) ?? -1},"; }
+  assert(got == "53,58,47,94,29,", "seed 12345, got {got}");
+  random::rand32_seed(42);
+  again = "";
+  for _ in 0..6 { again += "{random::rand32(0, 9) ?? -1},"; }
+  assert(again == "4,9,0,5,6,5,", "seed 42, got {again}");
+}
+
+fn test_empty_range_is_null() {
+  r = random::seed32(1);
+  assert(!r.get32(10, 5), "lo > hi is null");
+  assert(!random::rand32(3, 2), "lo > hi is null on the shared generator");
+  assert(r.get32(9, 9) == 9, "a one-value range answers it");
+}
+
+// Assigning copies the stream (both replay); every value of a small range turns up.
+fn test_copy_replays_and_range_is_covered() {
+  r1 = random::seed32(99);
+  r2 = r1;
+  ok = true;
+  for _ in 0..50 {
+    if r1.get32(0, 1000) != r2.get32(0, 1000) { ok = false; }
+  }
+  assert(ok, "a copy replays the same draws");
+  seen: vector<integer> = [0, 0, 0, 0, 0];
+  for _ in 0..500 {
+    v = r1.get32(0, 4) ?? 0;
+    seen[v] = (seen[v] ?? 0) + 1;
+  }
+  for c in seen { assert(c > 60, "each of five values near 100 of 500, got {seen}"); }
+}
+
+fn test_unit_in_range() {
+  r = random::seed32(5);
+  ok = true;
+  for _ in 0..1000 {
+    u = r.unit32();
+    if u < 0.0f || u >= 1.0f { ok = false; }
+  }
+  assert(ok, "unit32 stays in [0, 1)");
+}
+
+fn test_indices32_is_a_permutation() {
+  r = random::seed32(3);
+  p = r.indices32(20);
+  assert(len(p) == 20, "twenty indices");
+  seen: vector<boolean> = [];
+  for _ in 0..20 { seen += [false]; }
+  for v in p { seen[v] = true; }
+  for s in seen { assert(s, "every index once: {p}"); }
+  assert(len(r.indices32(0)) == 0, "empty for 0");
+}
+
+// A platform seed is a non-negative number where the platform has a source, else null.
+fn test_seed_hw() {
+  s = random::seed_hw();
+  if s != null {
+    assert(s >= 0, "non-negative, got {s}");
+  }
+}

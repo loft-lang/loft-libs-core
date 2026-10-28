@@ -140,3 +140,105 @@ pub fn indices(self: RandStream, n: integer) -> vector<integer> {
   }
   out
 }
+
+// --- Rand32: the 32-bit tier ---
+//
+// For a 32-bit processor, and for a `#width 32` program, which reads `integer` as `i32`: draws
+// that are `i32` and `single` from the start, computed in 32-bit arithmetic.  xoshiro128**
+// (128 bits of state, shifts and xors) with Lemire's multiply-shift for a range — no 128-bit
+// product and no 64-bit remainder, which the global tier pays on every draw and a 32-bit
+// processor pays as a library call.  The same C part runs on every target, so a seed draws the
+// same sequence everywhere.  A different generator from the global tier: a seed does not
+// reproduce `rand`'s sequence.
+
+// An owned 32-bit stream: assigning one copies it, passing one to a function links it, as a
+// `RandStream` does.  Its state is opaque: sixteen bytes only the C part reads and writes.
+pub struct Rand32 {
+  st: vector<u8>,
+}
+
+fn x32_seed(st: vector<u8>, seed: integer);
+#c "lr32_seed" "void(uint8_t*, int64_t)"
+fn x32_range(st: vector<u8>, lo: i32, hi: i32) -> i32;
+#c "lr32_range" "int32_t(uint8_t*, int32_t, int32_t)"
+fn x32_bits31(st: vector<u8>) -> i32;
+#c "lr32_bits31" "int32_t(uint8_t*)"
+fn x32_unit(st: vector<u8>) -> single;
+#c "lr32_unit" "float(uint8_t*)"
+fn x32g_seed(seed: integer);
+#c "lr32g_seed" "void(int64_t)"
+fn x32g_range(lo: i32, hi: i32) -> i32;
+#c "lr32g_range" "int32_t(int32_t, int32_t)"
+fn x32g_unit() -> single;
+#c "lr32g_unit" "float(void)"
+fn x32_hw_seed() -> integer;
+#c "lr32_hw_seed" "int64_t(void)"
+
+// Seed an owned 32-bit stream.  Any seed is valid; equal seeds give equal streams, and
+// different seeds give decorrelated ones (SplitMix64 spreads the seed over the state).
+pub fn seed32(seed: integer) -> Rand32 {
+  r = Rand32 { st: [0 as u8; 16] };
+  x32_seed(r.st, seed);
+  r
+}
+
+// A random `i32` in [lo, hi] (inclusive) from THIS stream, advancing it; null when lo > hi.
+// Unbiased: every value of the range is equally likely.
+pub fn get32(self: Rand32, lo: i32, hi: i32) -> i32? {
+  if lo > hi { return null; }
+  x32_range(self.st, lo, hi)
+}
+
+// The next 31 random bits of THIS stream, in [0, 2147483647].
+pub fn bits31(self: Rand32) -> i32 {
+  x32_bits31(self.st)
+}
+
+// A random `single` in [0, 1) from THIS stream: 24 random bits, all a single holds.
+pub fn unit32(self: Rand32) -> single {
+  x32_unit(self.st)
+}
+
+// A random permutation of [0, 1, ..., n-1] from THIS stream (Fisher-Yates), advancing it by
+// exactly n - 1 draws.  Empty when n is 0 or negative.
+pub fn indices32(self: Rand32, n: i32) -> vector<i32> {
+  out: vector<i32> = [];
+  if n <= 0 { return out; }
+  // Every position is in [0, n), inside i32: the mask says so where this 64-bit file computes it.
+  for i in 0..n { out += [i & 2147483647]; }
+  j = n - 1;
+  while j > 0 {
+    k = x32_range(self.st, 0, j & 2147483647);
+    t = out[j] ?? 0;
+    out[j] = out[k] ?? 0;
+    out[k] = t;
+    j -= 1;
+  }
+  out
+}
+
+// A random `i32` in [lo, hi] from the shared 32-bit generator (seeded with 12345 at startup);
+// null when lo > hi.  Shared like `rand`: any other call site's draw shifts your sequence.
+pub fn rand32(lo: i32, hi: i32) -> i32? {
+  if lo > hi { return null; }
+  x32g_range(lo, hi)
+}
+
+// Seed the shared 32-bit generator.
+pub fn rand32_seed(seed: integer) {
+  x32g_seed(seed);
+}
+
+// A random `single` in [0, 1) from the shared 32-bit generator.
+pub fn rand32_unit() -> single {
+  x32g_unit()
+}
+
+// A seed from the platform's entropy — the hardware random number generator on the Tanmatsu
+// (ESP-IDF), the operating system's elsewhere — for a run that is NOT meant to be reproduced:
+// `seed32(seed_hw() ?? 1)`.  Null where the platform has no entropy source (the wasm builds).
+pub fn seed_hw() -> integer? {
+  v = x32_hw_seed();
+  if v < 0 { return null; }
+  v
+}

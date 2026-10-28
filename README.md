@@ -21,7 +21,7 @@ Per the chunked-repo design in
 | [`arguments/`](arguments/) | `arguments` — GNU-style command-line argument parsing with generated `--help` |
 | [`cbor/`](cbor/) | `cbor` — canonical CBOR (RFC 8949) encode/decode, pure loft |
 | [`crypto/`](crypto/) | `crypto` — SHA-256/HMAC, base64, Ed25519, ES256, X25519, HKDF, AES-256-GCM, HPKE |
-| [`random/`](random/) | `random` — PRNGs in two tiers: a shared global generator and owned `RandStream`s |
+| [`random/`](random/) | `random` — PRNGs in three tiers: a shared global generator, owned `RandStream`s, and a 32-bit tier (`Rand32`) for 32-bit processors |
 | [`regex/`](regex/) | `regex` — small-script regex (`matches` / `search` / `split_on`, cached patterns) |
 | [`zttext/`](zttext/) | `zttext` — text engine: piece table, undoable edits, flow/justify/column layout, pagination, bidi, hit-testing |
 
