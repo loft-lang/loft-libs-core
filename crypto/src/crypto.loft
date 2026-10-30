@@ -399,7 +399,11 @@ pub fn bytes_to_base64(bytes: vector<u8>) -> text {
 // Raw bytes from standard base64.  Input that is not base64, or empty, -> empty vector.
 // Example: @CRY-001 — reading a decoded byte vector, and hashing non-UTF-8 bytes.
 pub fn base64_to_bytes(b64: text) -> vector<u8> {
-  b64_decode(b64) ?? []
+  // Bound first: a tail `b64_decode(b64) ?? []` answers the empty vector where the caller puts
+  // the result straight into a field (`CBytes { value: base64_to_bytes(s) }`) on a loft without
+  // the loft#2233 fix — both backends, nothing reported.
+  r = b64_decode(b64);
+  r ?? []
 }
 
 // --- AES-256-GCM authenticated encryption ---
