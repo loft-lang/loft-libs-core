@@ -17,7 +17,8 @@ static lr_u128 lr_state;
 static lr_u128 lr_incr;
 static int lr_seeded = 0;
 
-/* The low 128 bits of a * b. */
+#if !defined(__SIZEOF_INT128__)
+/* The low 128 bits of a * b — the step's product where the compiler has no 128-bit integer. */
 static lr_u128 lr_mul(lr_u128 a, lr_u128 b) {
     uint64_t a0 = a.lo & 0xFFFFFFFFu, a1 = a.lo >> 32;
     uint64_t b0 = b.lo & 0xFFFFFFFFu, b1 = b.lo >> 32;
@@ -29,6 +30,7 @@ static lr_u128 lr_mul(lr_u128 a, lr_u128 b) {
     r.hi += a.lo * b.hi + a.hi * b.lo;
     return r;
 }
+#endif
 
 static lr_u128 lr_add(lr_u128 a, lr_u128 b) {
     lr_u128 r;
@@ -37,13 +39,27 @@ static lr_u128 lr_add(lr_u128 a, lr_u128 b) {
     return r;
 }
 
-/* Lcg128Xsl64::step: state = state * MULTIPLIER + increment. */
+/* Lcg128Xsl64::step: state = state * MULTIPLIER + increment.  Where the compiler has a 128-bit
+ * integer the product is its multiply (three machine multiplies); elsewhere — a 32-bit target,
+ * a compiler without it — the portable lr_mul, which answers the same bits. */
+#if defined(__SIZEOF_INT128__)
+__extension__ typedef unsigned __int128 lr_wide;
+static void lr_step(void) {
+    lr_wide st = ((lr_wide) lr_state.hi << 64) | lr_state.lo;
+    lr_wide mul = ((lr_wide) UINT64_C(0x2360ED051FC65DA4) << 64) | UINT64_C(0x4385DF649FCCF645);
+    lr_wide inc = ((lr_wide) lr_incr.hi << 64) | lr_incr.lo;
+    st = st * mul + inc;
+    lr_state.lo = (uint64_t) st;
+    lr_state.hi = (uint64_t) (st >> 64);
+}
+#else
 static void lr_step(void) {
     lr_u128 mul;
     mul.hi = UINT64_C(0x2360ED051FC65DA4);
     mul.lo = UINT64_C(0x4385DF649FCCF645);
     lr_state = lr_add(lr_mul(lr_state, mul), lr_incr);
 }
+#endif
 
 static uint64_t lr_rotr64(uint64_t x, unsigned r) {
     r &= 63u;
