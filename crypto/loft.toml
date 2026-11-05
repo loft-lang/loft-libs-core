@@ -34,3 +34,8 @@ commit     = "f5f0a19a5dc6c14a49adb3cd63ea79a60f6ba77b"
 version    = "4.0.3+"
 digest     = "sha256:7c73dbb0614ab5aa581e7d9e432c099844154a0d9ecaa17a992eb82acc1d04d0"
 advisories = ["nvd:monocypher", "osv:commit", "github:LoupVaillant/Monocypher"]
+# Read up to here: its one commit since our pin fixes a typo in monocypher-ed25519.c.
+upstream-reviewed = "907e90ddd4c78f02e0d49e90384e4197f7dcdf26"
+
+[thirdparty.monocypher.reviewed]
+CVE-2026-53720 = "not-reached: the flaw is in pymonocypher, the Python wrapper, not in the Monocypher C library we vendor; crypto calls no argon2 function either"
