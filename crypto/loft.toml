@@ -1,6 +1,6 @@
 [package]
 name = "crypto"
-version = "0.4.0"
+version = "0.4.1"
 loft = ">=2026.10.0"
 api_compatible_with  = "0.3.2"   # oldest own release this is a drop-in for
 data_compatible_with = "0.3.2"   # oldest own release whose stored data this reads
@@ -15,3 +15,22 @@ entry = "src/crypto.loft"
 # the `#c` declarations in src/crypto.loft.  No Rust crate, no rustc, no wasm bridge.
 [c]
 shim = "c/crypto_glue.c, c/vendor/bearssl/aes_ct.c, c/vendor/bearssl/aes_ct_ctr.c, c/vendor/bearssl/aes_ct_dec.c, c/vendor/bearssl/aes_ct_enc.c, c/vendor/bearssl/ccopy.c, c/vendor/bearssl/dec32be.c, c/vendor/bearssl/dec32le.c, c/vendor/bearssl/dec64be.c, c/vendor/bearssl/dec64le.c, c/vendor/bearssl/ec_c25519_m31.c, c/vendor/bearssl/ec_p256_m31.c, c/vendor/bearssl/ec_secp256r1.c, c/vendor/bearssl/ec_secp384r1.c, c/vendor/bearssl/ec_secp521r1.c, c/vendor/bearssl/ecdsa_i31_bits.c, c/vendor/bearssl/ecdsa_i31_sign_raw.c, c/vendor/bearssl/ecdsa_i31_vrfy_raw.c, c/vendor/bearssl/enc32be.c, c/vendor/bearssl/enc32le.c, c/vendor/bearssl/enc64be.c, c/vendor/bearssl/enc64le.c, c/vendor/bearssl/gcm.c, c/vendor/bearssl/ghash_ctmul32.c, c/vendor/bearssl/hkdf.c, c/vendor/bearssl/hmac.c, c/vendor/bearssl/hmac_drbg.c, c/vendor/bearssl/i31_add.c, c/vendor/bearssl/i31_bitlen.c, c/vendor/bearssl/i31_decmod.c, c/vendor/bearssl/i31_decode.c, c/vendor/bearssl/i31_decred.c, c/vendor/bearssl/i31_encode.c, c/vendor/bearssl/i31_fmont.c, c/vendor/bearssl/i31_iszero.c, c/vendor/bearssl/i31_moddiv.c, c/vendor/bearssl/i31_modpow.c, c/vendor/bearssl/i31_montmul.c, c/vendor/bearssl/i31_mulacc.c, c/vendor/bearssl/i31_muladd.c, c/vendor/bearssl/i31_ninv31.c, c/vendor/bearssl/i31_reduce.c, c/vendor/bearssl/i31_rshift.c, c/vendor/bearssl/i31_sub.c, c/vendor/bearssl/i31_tmont.c, c/vendor/bearssl/i32_div32.c, c/vendor/bearssl/sha2small.c, c/vendor/monocypher/monocypher.c, c/vendor/monocypher/monocypher-ed25519.c"
+
+# What this package ships, compiles in or opens that it did not write (loft THIRDPARTY.md).
+[thirdparty.bearssl]
+kind       = "vendored"
+path       = "c/vendor/bearssl"
+upstream   = "https://www.bearssl.org/git/BearSSL"
+commit     = "7bea48e5e850ab4cafbe68d3765cdaba13a86d6f"
+version    = "0.6+"
+digest     = "sha256:0c17cbf03454c12a027426535ab3c2acab38ebecdf505d5fbb0a8bd6020b28d3"
+advisories = ["nvd:bearssl", "osv:commit"]
+
+[thirdparty.monocypher]
+kind       = "vendored"
+path       = "c/vendor/monocypher"
+upstream   = "https://github.com/LoupVaillant/Monocypher"
+commit     = "f5f0a19a5dc6c14a49adb3cd63ea79a60f6ba77b"
+version    = "4.0.3+"
+digest     = "sha256:7c73dbb0614ab5aa581e7d9e432c099844154a0d9ecaa17a992eb82acc1d04d0"
+advisories = ["nvd:monocypher", "osv:commit", "github:LoupVaillant/Monocypher"]
