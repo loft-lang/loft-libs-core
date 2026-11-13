@@ -73,8 +73,8 @@ fn hex(bytes: const vector<u8>) -> text {
   for b in bytes {
     hi = b / 16 ?? 0;
     lo = b % 16 ?? 0;
-    out += digits[hi..hi + 1];
-    out += digits[lo..lo + 1];
+    out += digits[hi];
+    out += digits[lo];
   }
   out
 }
@@ -94,10 +94,10 @@ fn b64_encode(bytes: const vector<u8>) -> text {
     c1 = (v / 4096 ?? 0) % 64 ?? 0;
     c2 = (v / 64 ?? 0) % 64 ?? 0;
     c3 = v % 64 ?? 0;
-    out += chars[c0..c0 + 1];
-    out += chars[c1..c1 + 1];
-    out += if i + 1 < n { chars[c2..c2 + 1] } else { "=" };
-    out += if i + 2 < n { chars[c3..c3 + 1] } else { "=" };
+    out += chars[c0];
+    out += chars[c1];
+    out += if i + 1 < n { chars[c2] } else { '=' };
+    out += if i + 2 < n { chars[c3] } else { '=' };
     i += 3;
   }
   out
