@@ -8,6 +8,7 @@ loft = ">=2026.11.20261114"
 api_compatible_with  = "0.3.2"   # oldest own release this is a drop-in for
 data_compatible_with = "0.3.2"   # oldest own release whose stored data this reads
 repository = "loft-libs-core"
+description = "SHA-256, HMAC, HKDF, AES-256-GCM, Ed25519, ECDSA P-256, X25519, HPKE, base64 and hex: one C source on every target, native == wasm"
 
 [library]
 entry = "src/crypto.loft"

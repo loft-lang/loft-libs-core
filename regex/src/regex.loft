@@ -217,6 +217,14 @@ pub fn capture(self: text, pattern: text) -> Match? {
   self.capture_from(pattern, 0)
 }
 
+// The bytes of the code point that starts at byte `at` of `self`, 1 at or past the end:
+// the step an empty match takes, so the next search starts on a character boundary.
+fn char_step(self: text, at: integer) -> integer {
+  if at >= size(self) { return 1; }
+  c = self[at] as integer;
+  if c < 128 { 1 } else if c < 2048 { 2 } else if c < 65536 { 3 } else { 4 }
+}
+
 // Every non-overlapping match of `pattern` in the text, in order, each with
 // its groups; empty when there is none.  An empty match advances one
 // character, so `a*` on `"baa"` answers three matches: `""`, `"aa"`, `""`.
@@ -231,7 +239,7 @@ pub fn capture_all(self: text, pattern: text) -> vector<Match> {
     if m == null { break; }
     s = m.start?;
     e = m.end?;
-    pos = if e > s { e } else { e + 1 };
+    pos = if e > s { e } else { e + char_step(self, e) };
     out += [m];
   }
   out
@@ -259,8 +267,8 @@ pub fn replace_on(self: text, pattern: text, template: text, limit: integer = 0)
     out += self[pos..s];
     out += expand(template, m);
     done += 1;
-    pos = if e > s { e } else { e + 1 };
-    if e == s && s < n { out += self[s..e + 1]; }
+    pos = if e > s { e } else { e + char_step(self, e) };
+    if e == s && s < n { out += self[s..pos]; }
   }
   if pos <= n { out += self[pos..n]; }
   out
