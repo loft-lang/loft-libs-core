@@ -17,8 +17,7 @@ backend.
 Deliberately minimal — this is the **small-script** text tool (log
 scanning, CLI fields, quick extraction).  You pass the pattern inline;
 there is no compile step and no handle to manage.  Compiled patterns are
-cached in a thread-local table, so repeated calls with the same pattern
-are cheap.
+cached, so repeated calls with the same pattern are cheap.
 
 > Structured parsing — grammars, ASTs, recursion — is **not** this
 > library's job.  That belongs to the match-pattern parser framework.
@@ -83,8 +82,8 @@ later use of the same pattern is a cache hit.
 A `Regex` handle (the pattern cache makes a compile step a worse API); a `replace`
 with a callback (a closure cannot cross a placed library — walk `capture_all` and build
 the result from the subject's spans, four lines, `@RGX-007`); a lazy `iterator<Match>`
-(`capture_all` answers a vector); lookaround and backreferences (the engine is
-linear-time by construction).  The plan: `doc/claude/plans/192-regex-captures-as-spans.md`
+(`capture_all` answers a vector); lookaround and backreferences (the engine
+keeps the `regex` crate's syntax, which has neither).  The plan: `doc/claude/plans/192-regex-captures-as-spans.md`
 in the loft repository.
 
 ## Worked examples

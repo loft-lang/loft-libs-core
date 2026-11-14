@@ -18,8 +18,8 @@ constant-time throughout; the subset under `c/vendor/bearssl`) and
 Base64, hex and the one-call API are loft.  No Rust crate and no rustc: `cc`
 builds the shim for the host, `clang` builds it for `--native-wasm` and the
 **browser** (`--html`), where every primitive runs from the same C source — all
-but the two that draw entropy (`random_bytes`, `ecdsa_p256_keygen`), which
-answer `""` on a wasm target: a module has no entropy source of its own.
+but the three that draw entropy (`random_bytes`, `ecdsa_p256_keygen`, and
+`hpke_seal_base`, whose ephemeral key is drawn), which answer empty on a wasm target: a module has no entropy source of its own.
 
 ## Install
 
@@ -30,7 +30,7 @@ loft install crypto
 Then in your `.loft` source:
 
 ```loft
-use crypto;
+use crypto::*;
 
 fn main() {
     digest = sha256("hello world");

@@ -86,3 +86,17 @@ fn test_invalid_pattern_safe() {
   assert(!"x".matches("("), "invalid -> no match");
   assert(!"x".search("["), "invalid -> null find");
 }
+
+// An empty match steps one CHARACTER: a multi-byte one is neither split nor written twice.
+fn test_an_empty_match_steps_a_whole_character() {
+  a = "é".replace_on("x*", "-");
+  assert(a == "-é-", "one two-byte character: {a}");
+  b = "aéb".replace_on("x*", "-");
+  assert(b == "-a-é-b-", "between ascii: {b}");
+  c = "日本".replace_on("x*", "-");
+  assert(c == "-日-本-", "three-byte characters: {c}");
+  d = "ab".replace_on("x*", "-");
+  assert(d == "-a-b-", "ascii as before: {d}");
+  n = len("aé日".capture_all("x*"));
+  assert(n == 4, "one empty match per boundary: {n}");
+}

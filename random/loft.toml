@@ -1,6 +1,7 @@
 [package]
 name = "random"
-version = "0.5.1"
+version = "0.5.2"
+description = "PRNGs in three tiers: a shared PCG-64 with rand_seed reproducibility, owned RandStream streams, and a 32-bit tier"
 loft = ">=2026.10.0"
 
 api_compatible_with  = "0.3.0"   # oldest own release this is a drop-in for
