@@ -1,6 +1,6 @@
 [package]
 name = "crypto"
-version = "0.4.2"
+version = "0.4.3"
 # hex and base64 append the alphabet's character by index (`out += chars[c0]`); a loft before
 # the day that reads a text operand before a later operand writes it (loft b8b5ffb08) may answer
 # the wrong character there, so this release needs that day's build.
