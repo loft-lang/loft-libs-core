@@ -251,44 +251,45 @@ fn read_value(bytes: vector<u8>, pos: integer, depth: integer) -> Decoded {
   // The payload arms take their span of the frame in ONE block (`bytes[argpos..argpos + arg]`,
   // a slice at a field and at an argument position): no per-byte loop, no buffer of their own.
   // On a frame the host hands over as read-only bytes the span is read in place.
+  // A length is the sender's word.  Each is held against the bytes that are left before it
+  // sizes anything: `arg > n - argpos` cannot overflow where `argpos + arg` can, and an array
+  // of `arg` items needs at least a byte each, a map two.
   if major == 2 {
-    if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
+    if arg > n - argpos { return Decoded { value: CNull, next: pos, ok: false }; }
     return Decoded { value: CBytes { value: bytes[argpos..argpos + arg] }, next: argpos + arg, ok: true };
   }
   if major == 3 {
-    if argpos + arg > n { return Decoded { value: CNull, next: pos, ok: false }; }
+    if arg > n - argpos { return Decoded { value: CNull, next: pos, ok: false }; }
     return Decoded { value: CText { value: text_from_bytes(bytes[argpos..argpos + arg]) }, next: argpos + arg, ok: true };
   }
   if major == 4 {
+    if arg > n - argpos { return Decoded { value: CNull, next: pos, ok: false }; }
     items: vector<CborValue> = [];
     p = argpos;
     aok = true;
     for _ in 0..arg {
-      if aok {
-        sub = read_value(bytes, p, depth + 1);
-        if sub.ok { items += [sub.value]; p = sub.next; } else { aok = false; }
-      }
+      sub = read_value(bytes, p, depth + 1);
+      if !sub.ok { aok = false; break; }
+      items += [sub.value];
+      p = sub.next;
     }
     if !aok { return Decoded { value: CNull, next: pos, ok: false }; }
     return Decoded { value: CArray { items: items }, next: p, ok: true };
   }
   if major == 5 {
+    if arg > (n - argpos) / 2 { return Decoded { value: CNull, next: pos, ok: false }; }
     entries: vector<CborEntry> = [];
     p = argpos;
     mok = true;
     for _ in 0..arg {
-      if mok {
-        kd = read_value(bytes, p, depth + 1);
-        if kd.ok {
-          vd = read_value(bytes, kd.next, depth + 1);
-          if vd.ok {
-            kv = kd.value;
-            vv = vd.value;
-            entries += [CborEntry { key: kv, value: vv }];
-            p = vd.next;
-          } else { mok = false; }
-        } else { mok = false; }
-      }
+      kd = read_value(bytes, p, depth + 1);
+      if !kd.ok { mok = false; break; }
+      vd = read_value(bytes, kd.next, depth + 1);
+      if !vd.ok { mok = false; break; }
+      kv = kd.value;
+      vv = vd.value;
+      entries += [CborEntry { key: kv, value: vv }];
+      p = vd.next;
     }
     if !mok { return Decoded { value: CNull, next: pos, ok: false }; }
     return Decoded { value: CMap { entries: entries }, next: p, ok: true };
