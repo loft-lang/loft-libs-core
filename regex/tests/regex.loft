@@ -100,3 +100,17 @@ fn test_an_empty_match_steps_a_whole_character() {
   n = len("aé日".capture_all("x*"));
   assert(n == 4, "one empty match per boundary: {n}");
 }
+
+// The matcher goes one call deeper per repetition, so the input decides its depth.  A run that
+// fits matches as before; a run of 200,000 characters is given up on (no match) where it used
+// to end the process with a stack overflow.
+fn test_a_long_run_is_given_up_on_not_a_crash() {
+  short = "";
+  for _ in 0..20000 { short += "a"; }
+  assert(short.matches("^\\w+$"), "20,000 characters match");
+  long = short;
+  for _ in 0..9 { long += short; }
+  assert(len(long) == 200000, "the long run is 200,000 characters, not {len(long)}");
+  assert(!long.matches("^\\w+$"), "200,000 characters are given up on");
+  assert("after".matches("^\\w+$"), "and the next match is unaffected");
+}
