@@ -1059,10 +1059,10 @@ static size_t rx_start_at(const unsigned char *in, size_t n, int64_t from) {
 }
 
 int64_t rx_group_count(const char *pattern);
-int64_t rx_spans(const char *pattern, const char *input, int64_t from, int64_t *out, int64_t cap);
-int64_t rx_is_match(const char *pattern, const char *input);
-int64_t rx_match_start_at(const char *pattern, const char *input, int64_t from);
-int64_t rx_match_end_at(const char *pattern, const char *input, int64_t from);
+int64_t rx_spans(const char *pattern, const char *input, int64_t len, int64_t from, int64_t *out, int64_t cap);
+int64_t rx_is_match(const char *pattern, const char *input, int64_t len);
+int64_t rx_match_start_at(const char *pattern, const char *input, int64_t len, int64_t from);
+int64_t rx_match_end_at(const char *pattern, const char *input, int64_t len, int64_t from);
 const char *rx_group_names(const char *pattern);
 const char *rx_error(const char *pattern);
 
@@ -1072,16 +1072,19 @@ int64_t rx_group_count(const char *pattern) {
     return !p || p->error ? -1 : p->ngroups;
 }
 
+/* The input of every entry point below is `len` bytes at `input`: a loft text carries its length
+ * and may hold a NUL, so the engine is told how long it is and never measures it. */
+
 /* The spans of the first match at or after `from` into `out` (at most `cap` integers):
  * `s0 e0 s1 e1 …`, -1 -1 for a group that took no part; the count written, 0 when nothing
  * matched or the pattern does not compile. */
-int64_t rx_spans(const char *pattern, const char *input, int64_t from, int64_t *out, int64_t cap) {
+int64_t rx_spans(const char *pattern, const char *input, int64_t len, int64_t from, int64_t *out, int64_t cap) {
     rx_prog *p = rx_get(pattern);
     size_t n;
     long *caps;
     int ncaps, k;
     if (!p || p->error || !input) return 0;
-    n = strlen(input);
+    n = len > 0 ? (size_t) len : 0;
     ncaps = 2 * (p->ngroups + 1);
     caps = (long *) malloc(sizeof(long) * (size_t) ncaps);
     if (!caps) return 0;
@@ -1094,12 +1097,12 @@ int64_t rx_spans(const char *pattern, const char *input, int64_t from, int64_t *
     return k;
 }
 
-int64_t rx_is_match(const char *pattern, const char *input) {
+int64_t rx_is_match(const char *pattern, const char *input, int64_t len) {
     rx_prog *p = rx_get(pattern);
     long caps[2];
     size_t n;
     if (!p || p->error || !input) return 0;
-    n = strlen(input);
+    n = len > 0 ? (size_t) len : 0;
     if (p->ngroups == 0) return rx_search(p, (const unsigned char *) input, n, 0, caps) ? 1 : 0;
     {
         long *c = (long *) malloc(sizeof(long) * 2 * ((size_t) p->ngroups + 1));
@@ -1111,13 +1114,13 @@ int64_t rx_is_match(const char *pattern, const char *input) {
     }
 }
 
-static int64_t rx_match_edge(const char *pattern, const char *input, int64_t from, int which) {
+static int64_t rx_match_edge(const char *pattern, const char *input, int64_t len, int64_t from, int which) {
     rx_prog *p = rx_get(pattern);
     long *c;
     size_t n;
     int64_t r = INT64_MIN;
     if (!p || p->error || !input) return INT64_MIN;
-    n = strlen(input);
+    n = len > 0 ? (size_t) len : 0;
     c = (long *) malloc(sizeof(long) * 2 * ((size_t) p->ngroups + 1));
     if (!c) return INT64_MIN;
     if (rx_search(p, (const unsigned char *) input, n, rx_start_at((const unsigned char *) input, n, from), c)) r = c[which];
@@ -1126,13 +1129,13 @@ static int64_t rx_match_edge(const char *pattern, const char *input, int64_t fro
 }
 
 /* The start of the first match at or after `from`, null (INT64_MIN) when none. */
-int64_t rx_match_start_at(const char *pattern, const char *input, int64_t from) {
-    return rx_match_edge(pattern, input, from, 0);
+int64_t rx_match_start_at(const char *pattern, const char *input, int64_t len, int64_t from) {
+    return rx_match_edge(pattern, input, len, from, 0);
 }
 
 /* The end of that match. */
-int64_t rx_match_end_at(const char *pattern, const char *input, int64_t from) {
-    return rx_match_edge(pattern, input, from, 1);
+int64_t rx_match_end_at(const char *pattern, const char *input, int64_t len, int64_t from) {
+    return rx_match_edge(pattern, input, len, from, 1);
 }
 
 static char rx_text_buf[4096];

@@ -114,3 +114,21 @@ fn test_a_long_run_is_given_up_on_not_a_crash() {
   assert(!long.matches("^\\w+$"), "200,000 characters are given up on");
   assert("after".matches("^\\w+$"), "and the next match is unaffected");
 }
+
+// A text may hold a NUL byte, and the input is matched to its end, not to the NUL: a
+// pattern that vets a whole text (`^…$`) must see the part after one.
+fn test_the_input_is_matched_past_a_nul() {
+  assert("abc".matches("^[a-z0-9]+$"), "the plain text matches");
+  assert(!"abc\0<script>".matches("^[a-z0-9]+$"), "a NUL does not end the vetted text");
+  assert("ab\0cd9".search("9") == 5, "a match after the NUL is found at byte 5");
+  m = "ab\0cd".capture("[a-z]+$");
+  assert(m != null, "the end anchor is the end of the text");
+  assert(m.start == 3 && m.end == 5, "the tail is bytes 3..5, not {m.start}..{m.end}");
+  assert("{m.group(0)}" == "cd", "and reads cd");
+  assert("a\0b".matches("^a\\x00b$"), "a pattern names a NUL as \\x00");
+  assert("ax\0bxc".replace_on("x", "Y") == "aY\0bYc", "every match is replaced, on both sides of a NUL");
+  assert(len("a\0a".capture_all("a")) == 2, "both matches are found");
+  parts = 0;
+  for _ in "a,b\0,c".split_on(",") { parts += 1; }
+  assert(parts == 3, "the text splits at both commas, into {parts}");
+}
