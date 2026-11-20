@@ -42,6 +42,25 @@ fn test_sha256_abc() {
          "sha256(abc)={hash}");
 }
 
+fn test_sha256_covers_bytes_past_a_nul() {
+  // A text may hold a NUL; the hash is over all seven bytes, not the three before it.
+  hash = crypto::sha256("abc\0def");
+  assert(hash == "516a5e926ce20c5f4d80f00e1a01abdf14986def6588d6abeed9fce090bc660c",
+         "sha256(abc NUL def)={hash}");
+  assert(hash != crypto::sha256("abc"), "a NUL must not end the hashed text");
+}
+
+fn test_hmac_sha256_covers_bytes_past_a_nul() {
+  // In the data: a MAC that stopped at the NUL would also vouch for any text appended there.
+  mac = crypto::hmac_sha256("k", "abc\0def");
+  assert(mac == "884f640e4853bba8074d2448ab44b10592248d73ade26089a886422e0a812501",
+         "hmac(k, abc NUL def)={mac}");
+  // In the key: two keys that differ after a NUL are two keys.
+  mac = crypto::hmac_sha256("k\0x", "abc");
+  assert(mac == "b05dbc43bb7abbb3205596531d18ba8ed6c4d8d019991198a49e7551c439b093",
+         "hmac(k NUL x, abc)={mac}");
+}
+
 fn test_sha256_55_byte_boundary() {
   // SHA-256's block is 64 bytes; the padding format reserves 9 bytes
   // (1 byte 0x80 + 8 byte length).  55 bytes fits in a single block

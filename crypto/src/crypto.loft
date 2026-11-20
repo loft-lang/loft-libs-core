@@ -21,12 +21,13 @@
 // count); each entry answers 1 for success and 0 for a refusal.  Base64 and hex are loft's,
 // below.
 
-fn c_sha256_text(data: text, out: vector<u8>) -> integer;
-#c "cr_sha256_text" "int(const char*, void*)"
+// A text is hashed over all its bytes: it may hold a NUL, so the count crosses beside it.
+fn c_sha256_text(data: text, n: integer, out: vector<u8>) -> integer;
+#c "cr_sha256" "int(const void*, int64_t, void*)"
 fn c_sha256(data: const vector<u8>, out: vector<u8>) -> integer;
 #c "cr_sha256" "int(const void*, int64_t, void*)"
-fn c_hmac_sha256_text(key: text, data: text, out: vector<u8>) -> integer;
-#c "cr_hmac_sha256_text" "int(const char*, const char*, void*)"
+fn c_hmac_sha256_text(key: text, klen: integer, data: text, n: integer, out: vector<u8>) -> integer;
+#c "cr_hmac_sha256" "int(const void*, int64_t, const void*, int64_t, void*)"
 fn c_hkdf_extract(salt: const vector<u8>, ikm: const vector<u8>, out: vector<u8>) -> integer;
 #c "cr_hkdf_extract" "int(const void*, int64_t, const void*, int64_t, void*)"
 fn c_hkdf_expand(prk: const vector<u8>, info: const vector<u8>, out: vector<u8>) -> integer;
@@ -171,7 +172,7 @@ fn b64_fixed(b64: text, n: integer) -> vector<u8>? {
 // SHA-256 hash of a string. Returns 64-char hex string.
 pub fn sha256(data: text) -> text {
   out = zeros(32);
-  c_sha256_text(data, out);
+  c_sha256_text(data, size(data), out);
   hex(out)
 }
 
@@ -191,7 +192,7 @@ pub fn sha256_b64(data_b64: text) -> text {
 // HMAC-SHA256 of data with key. Returns 64-char hex string.
 pub fn hmac_sha256(key: text, data: text) -> text {
   out = zeros(32);
-  c_hmac_sha256_text(key, data, out);
+  c_hmac_sha256_text(key, size(key), data, size(data), out);
   hex(out)
 }
 

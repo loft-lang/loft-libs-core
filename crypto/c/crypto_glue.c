@@ -24,9 +24,7 @@
 #endif
 
 int cr_sha256(const void *data, int64_t n, void *out32);
-int cr_sha256_text(const char *data, void *out32);
 int cr_hmac_sha256(const void *key, int64_t klen, const void *data, int64_t n, void *out32);
-int cr_hmac_sha256_text(const char *key, const char *data, void *out32);
 int cr_hkdf_extract(const void *salt, int64_t slen, const void *ikm, int64_t ilen, void *out32);
 int cr_hkdf_expand(const void *prk, int64_t plen, const void *info, int64_t ilen, void *out, int64_t olen);
 int cr_hkdf(const void *salt, int64_t slen, const void *ikm, int64_t ilen, const void *info, int64_t inlen, void *out, int64_t olen);
@@ -52,10 +50,6 @@ int cr_sha256(const void *data, int64_t n, void *out32) {
 }
 
 /* A text's bytes, as the `#c` boundary hands a text: NUL-terminated. */
-int cr_sha256_text(const char *data, void *out32) {
-    return cr_sha256(data, (int64_t) strlen(data), out32);
-}
-
 int cr_hmac_sha256(const void *key, int64_t klen, const void *data, int64_t n, void *out32) {
     br_hmac_key_context kc;
     br_hmac_context hc;
@@ -64,10 +58,6 @@ int cr_hmac_sha256(const void *key, int64_t klen, const void *data, int64_t n, v
     if (n > 0) br_hmac_update(&hc, data, cr_len(n));
     br_hmac_out(&hc, out32);
     return 1;
-}
-
-int cr_hmac_sha256_text(const char *key, const char *data, void *out32) {
-    return cr_hmac_sha256(key, (int64_t) strlen(key), data, (int64_t) strlen(data), out32);
 }
 
 /* HKDF-Extract (RFC 5869 § 2.2): an empty salt is a hash-length of zeros, as the RFC says —
