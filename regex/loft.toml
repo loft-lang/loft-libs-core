@@ -1,6 +1,6 @@
 [package]
 name = "regex"
-version = "0.6.1"
+version = "0.6.2"
 loft = ">=2026.10.0"
 description = "Small-script regex: `search`, `matches`, `capture` / `capture_all` with groups, `replace_on` and a lazy `split_on`, with a cache of compiled patterns."
 

@@ -789,6 +789,11 @@ static rx_prog *rx_compile(const char *pattern) {
 /* ── The matcher: recursive backtracking with capture restore ───────────────────────────── */
 
 #define RX_STEP_LIMIT 20000000L
+/* The matcher recurses once per repetition it is inside, so the input decides how deep it goes:
+ * a run of 80,000 characters under `\w+` ended the process with a stack overflow.  Past this
+ * depth an attempt gives up, as it does past the step limit — 50,000 is below where an 8 MiB
+ * stack ran out, and above every length that matched before. */
+#define RX_DEPTH_LIMIT 50000L
 
 typedef struct {
     const rx_prog *p;
@@ -797,6 +802,7 @@ typedef struct {
     int *counters;
     long *lastpos;    /* per counter: where the current iteration began */
     long steps;
+    long depth;
     int gave_up;
 } rx_run;
 
@@ -844,8 +850,18 @@ static int rx_word_before(rx_run *r, const unsigned char *pos) {
 }
 
 static int rx_step(rx_run *r, int pc, const unsigned char *pos);
+static int rx_step_at(rx_run *r, int pc, const unsigned char *pos);
 
 static int rx_step(rx_run *r, int pc, const unsigned char *pos) {
+    int ok;
+    if (r->depth >= RX_DEPTH_LIMIT) { r->gave_up = 1; return 0; }
+    r->depth++;
+    ok = rx_step_at(r, pc, pos);
+    r->depth--;
+    return ok;
+}
+
+static int rx_step_at(rx_run *r, int pc, const unsigned char *pos) {
     for (;;) {
         const rx_inst *i;
         if (++r->steps > RX_STEP_LIMIT) { r->gave_up = 1; return 0; }
@@ -998,6 +1014,7 @@ static int rx_search(const rx_prog *p, const unsigned char *in, size_t n, size_t
     r.counters = (int *) calloc((size_t) p->ncounters + 1, sizeof(int));
     r.lastpos = (long *) calloc((size_t) p->ncounters + 1, sizeof(long));
     r.steps = 0;
+    r.depth = 0;
     r.gave_up = 0;
     if (!r.counters || !r.lastpos) { free(r.counters); free(r.lastpos); return 0; }
     for (start = from; start <= n; ) {

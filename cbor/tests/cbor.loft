@@ -86,6 +86,16 @@ fn main() {
   assert(!decode([0x18 as u8]).ok,             "truncated rejected");
   assert(!decode([0x18 as u8, 0x00 as u8]).ok, "overlong head rejected");
   assert(!decode([0x00 as u8, 0x00 as u8]).ok, "trailing bytes rejected");
+  // A count is the sender's word: nine bytes claiming 2^62 array items, map pairs, bytes or
+  // text are refused at once — the frame holds none of them.  Looping the count ran for
+  // longer than any test waits.
+  for major in [0x9b as u8, 0xbb as u8, 0x5b as u8, 0x7b as u8] {
+    huge: vector<u8> = [major, 0x40 as u8];
+    for _ in 0..7 { huge += [0x00 as u8]; }
+    assert(!decode(huge).ok, "a count of 2^62 with no content is refused (head {major})");
+  }
+  // And one that does fit its frame still decodes: three one-byte items.
+  assert(decode([0x83 as u8, 0x01 as u8, 0x02 as u8, 0x03 as u8]).ok, "an array of three decodes");
 
   // Nesting: MAX_DEPTH levels decode, one more is refused, and a hostile stream of
   // array heads far past it answers ok=false instead of exhausting the call stack.
