@@ -38,6 +38,8 @@ int cr_p256_public_key(const void *d32, void *out64);
 int cr_p256_sign(const void *d32, const void *msg, int64_t n, void *out64);
 int cr_p256_verify(const void *xy64, const void *msg, int64_t n, const void *sig64);
 int cr_random(void *out, int64_t n);
+int cr_equal(const void *a, int64_t alen, const void *b, int64_t blen);
+int cr_argon2id(const void *pass, int64_t plen, const void *salt, int64_t slen, int64_t kib, int64_t passes, int64_t lanes, void *work, int64_t wlen, void *out, int64_t olen);
 
 static size_t cr_len(int64_t n) { return n < 0 ? 0 : (size_t) n; }
 
@@ -124,7 +126,12 @@ int cr_x25519(const void *secret32, const void *public32, void *out32) {
     int i;
     for (i = 0; i < 32; i++) k[i] = ((const unsigned char *) secret32)[31 - i];
     memcpy(p, public32, 32);
+    unsigned char any = 0;
     if (br_ec_c25519_m31.mul(p, 32, k, 32, BR_EC_curve25519) != 1) return 0;
+    /* A public key of small order makes every secret answer zero (RFC 7748 § 6.1): the result
+     * is then no secret at all, and is refused. */
+    for (i = 0; i < 32; i++) any |= p[i];
+    if (!any) return 0;
     memcpy(out32, p, 32);
     return 1;
 }
@@ -230,4 +237,40 @@ int cr_random(void *out, int64_t n) {
     fclose(f);
     return got == cr_len(n);
 #endif
+}
+
+/* Whether two byte strings are equal, in a time that depends on their length only, not on
+ * where they first differ: a MAC or a token compared with memcmp tells an attacker how many
+ * of its leading bytes were right. */
+int cr_equal(const void *a, int64_t alen, const void *b, int64_t blen) {
+    const unsigned char *x = (const unsigned char *) a, *y = (const unsigned char *) b;
+    unsigned char diff = 0;
+    size_t i, n = cr_len(alen);
+    if (alen != blen) return 0;
+    for (i = 0; i < n; i++) diff |= (unsigned char) (x[i] ^ y[i]);
+    return diff == 0;
+}
+
+/* Argon2id (RFC 9106) over Monocypher: `kib` KiB of memory, `passes` passes, `lanes` lanes,
+ * `olen` bytes out.  The work area is the caller's (`wlen` bytes, 8 more than `kib` KiB so its
+ * blocks can start on an 8-byte boundary): the wasm targets have no allocator here. */
+int cr_argon2id(const void *pass, int64_t plen, const void *salt, int64_t slen, int64_t kib, int64_t passes, int64_t lanes, void *work, int64_t wlen, void *out, int64_t olen) {
+    crypto_argon2_config config;
+    crypto_argon2_inputs inputs;
+    uintptr_t at = (uintptr_t) work;
+    if (lanes < 1 || lanes > 16 || passes < 1 || passes > 64 || kib < 8 * lanes || kib > 1048576) return 0;
+    if (slen < 8 || slen > 64 || plen < 0 || plen > 0xffffffffL || olen < 4 || olen > 64) return 0;
+    if (wlen < kib * 1024 + 8) return 0;
+    at = (at + 7) & ~(uintptr_t) 7;
+    config.algorithm = CRYPTO_ARGON2_ID;
+    config.nb_blocks = (uint32_t) kib;
+    config.nb_passes = (uint32_t) passes;
+    config.nb_lanes = (uint32_t) lanes;
+    inputs.pass = (const uint8_t *) pass;
+    inputs.pass_size = (uint32_t) plen;
+    inputs.salt = (const uint8_t *) salt;
+    inputs.salt_size = (uint32_t) slen;
+    crypto_argon2((uint8_t *) out, (uint32_t) olen, (void *) at, config, inputs, crypto_argon2_no_extras);
+    crypto_wipe((void *) at, (size_t) kib * 1024);
+    return 1;
 }

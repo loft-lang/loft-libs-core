@@ -54,6 +54,10 @@ fn c_p256_verify(xy: const vector<u8>, message: const vector<u8>, signature: con
 #c "cr_p256_verify" "int(const void*, const void*, int64_t, const void*)"
 fn c_random(out: vector<u8>) -> integer;
 #c "cr_random" "int(void*, int64_t)"
+fn c_equal_text(a: text, alen: integer, b: text, blen: integer) -> boolean;
+#c "cr_equal" "int(const void*, int64_t, const void*, int64_t)"
+fn c_argon2id(pass: text, plen: integer, salt: const vector<u8>, kib: integer, passes: integer, lanes: integer, work: vector<u8>, out: vector<u8>) -> integer;
+#c "cr_argon2id" "int(const void*, int64_t, const void*, int64_t, int64_t, int64_t, int64_t, void*, int64_t, void*, int64_t)"
 
 // --- Bytes, base64 and hex, in loft ---
 
@@ -196,6 +200,23 @@ pub fn hmac_sha256(key: text, data: text) -> text {
   hex(out)
 }
 
+// Whether two texts are the same bytes, compared in a time that depends on their length only,
+// not on where they first differ.  Compare a MAC, a token or a digest with this, never with
+// `==`, which answers sooner the earlier the bytes differ and so tells an attacker how much of
+// a guess was right.  A null text equals nothing.
+// Example: @CRY-007 — checking a MAC a client sent.
+pub fn constant_time_equal(a: text, b: text) -> boolean {
+  if a == null || b == null { return false; }
+  c_equal_text(a, size(a), b, size(b))
+}
+
+// Whether `mac_hex` is the HMAC-SHA256 of `data` under `key`, as `hmac_sha256` spells it (64
+// lowercase hex characters), compared in constant time.
+// Example: @CRY-007 — the one call that checks a MAC.
+pub fn hmac_sha256_verify(key: text, data: text, mac_hex: text) -> boolean {
+  constant_time_equal(hmac_sha256(key, data), mac_hex)
+}
+
 // Base64 encode a string.
 pub fn base64_encode(data: text) -> text {
   b64_encode(text_bytes(data))
@@ -320,7 +341,8 @@ pub fn ecdsa_p256_verify(public_key_b64: text, message_b64: text, signature_b64:
 //
 // A secret key is a 32-byte X25519 scalar (base64); a public key is the
 // 32-byte u-coordinate (base64).  Returns the raw 32-byte shared secret
-// (base64), or "" if either input is the wrong length.  Run the result
+// (base64), or "" if either input is the wrong length or the public key is
+// of small order (the result would be all zeros, RFC 7748 § 6.1).  Run the result
 // through `hkdf_sha256` before using it as a key (RFC 7748 §6.1).
 // Example: @CRY-004 — the DH output is keying material, not a key; and how to get a
 // public key out of a secret scalar (X25519 has no separate keygen).
@@ -462,6 +484,86 @@ pub fn random_bytes(length: integer) -> text {
   out = zeros(length);
   if c_random(out) == 0 { return ""; }
   b64_encode(out)
+}
+
+
+// --- Password hashing — Argon2id (RFC 9106) ---
+//
+// A password is stored as the text `password_hash` answers and checked with `password_verify`;
+// never as a SHA-256 or an HMAC of it, which a guesser computes billions of times a second.
+// The text is the PHC string the other Argon2 implementations read and write:
+// `$argon2id$v=19$m=<KiB>,t=<passes>,p=<lanes>$<salt>$<hash>`, salt and hash in base64 without
+// padding.  `password_hash` takes 19 MiB and two passes with a fresh 16-byte salt (the RFC 9106
+// second recommendation, and OWASP's); `password_verify` reads the cost from the stored text, so
+// hashes made with other costs still verify.
+
+// The parameters `password_verify` accepts from a stored hash: a hash that names more is refused
+// rather than run, so a stored text cannot make one check take a gigabyte or a minute.
+fn argon2_cost_ok(kib: integer, passes: integer, lanes: integer) -> boolean {
+  lanes >= 1 && lanes <= 16 && passes >= 1 && passes <= 64 && kib >= 8 * lanes && kib <= 1048576
+}
+
+// The `olen`-byte Argon2id of `password` under `salt`, or null when a parameter is out of range.
+fn argon2id_raw(password: text, salt: const vector<u8>, kib: integer, passes: integer, lanes: integer, olen: integer) -> vector<u8>? {
+  if !argon2_cost_ok(kib, passes, lanes) { return null; }
+  work = zeros(kib * 1024 + 8);
+  out = zeros(olen);
+  if c_argon2id(password, size(password), salt, kib, passes, lanes, work, out) == 0 { return null; }
+  out
+}
+
+// Base64 without padding, as the PHC string spells it.
+fn b64_nopad(bytes: const vector<u8>) -> text {
+  out = "";
+  for c in b64_encode(bytes) {
+    if c != '=' { out += "{c}"; }
+  }
+  out
+}
+
+// A decimal integer of at most 9 digits, or -1.
+fn small_decimal(t: text) -> integer {
+  if size(t) == 0 || size(t) > 9 { return -1; }
+  v = 0;
+  for i in 0..size(t) {
+    c = t.byte_at(i);
+    if c < 48 || c > 57 { return -1; }
+    v = v * 10 + c - 48;
+  }
+  v
+}
+
+// The PHC string of the Argon2id hash of `password`, with a fresh random salt; "" when the
+// system's random source fails.
+// Example: @CRY-008 — store this text; check a login with `password_verify`.
+pub fn password_hash(password: text) -> text {
+  salt = zeros(16);
+  if c_random(salt) == 0 { return ""; }
+  digest = argon2id_raw(password, salt, 19456, 2, 1, 32);
+  if digest == null { return ""; }
+  "$argon2id$v=19$m=19456,t=2,p=1${b64_nopad(salt)}${b64_nopad(digest)}"
+}
+
+// Whether `password` is the one `stored` (a `password_hash` text, or any Argon2id PHC string
+// within the limits above) was made from.  False for anything that is not such a string.
+// Example: @CRY-008
+pub fn password_verify(password: text, stored: text) -> boolean {
+  parts = stored.split('$');
+  if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" || parts[2] != "v=19" { return false; }
+  cost = parts[3].split(',');
+  if len(cost) != 3 { return false; }
+  if !cost[0].starts_with("m=") || !cost[1].starts_with("t=") || !cost[2].starts_with("p=") { return false; }
+  kib = small_decimal(cost[0][2..]);
+  passes = small_decimal(cost[1][2..]);
+  lanes = small_decimal(cost[2][2..]);
+  if !argon2_cost_ok(kib, passes, lanes) { return false; }
+  salt = b64_decode(parts[4]);
+  want = b64_decode(parts[5]);
+  if salt == null || want == null { return false; }
+  if len(salt) < 8 || len(salt) > 64 || len(want) < 4 || len(want) > 64 { return false; }
+  got = argon2id_raw(password, salt, kib, passes, lanes, len(want));
+  if got == null { return false; }
+  constant_time_equal(b64_encode(got), b64_encode(want))
 }
 
 

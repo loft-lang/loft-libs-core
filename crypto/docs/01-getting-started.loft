@@ -153,9 +153,10 @@ fn a_length_you_did_not_ask_for() {
 //
 // - `README.md` — the whole surface: ECDSA-P256 (deterministic, flat JOSE encodings),
 //   X25519, HKDF's three doors, AES-256-GCM and HPKE.
-// - `tests/` — `@CRY-001` … `@CRY-006`, six contracts a signature cannot state, each a
+// - `tests/` — `@CRY-001` … `@CRY-008`, eight contracts a signature cannot state, each a
 //   running test: the two hashing doors, the signing spelling above, ES256's determinism,
-//   why a Diffie-Hellman output is NOT a key, where AES-GCM's tag lives, and the three
-//   things an HPKE recipient needs.
+//   why a Diffie-Hellman output is NOT a key, where AES-GCM's tag lives, the three
+//   things an HPKE recipient needs, checking a MAC in constant time, and storing a
+//   password as an Argon2id hash rather than a digest.
 // - `cbor` for a canonical record to hash or sign, and `pluginabi` for a protocol built on
 //   both.

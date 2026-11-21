@@ -56,6 +56,15 @@ Every function fails **soft**: malformed input returns `""` (or `false` for
 | `sha256(data: text) -> text` | 64-char lowercase hex digest |
 | `sha256_b64(data_b64: text) -> text` | **base64** of the 32-byte digest of the base64-decoded bytes |
 | `hmac_sha256(key: text, data: text) -> text` | 64-char lowercase hex MAC |
+| `hmac_sha256_verify(key: text, data: text, mac_hex: text) -> boolean` | `true` iff `mac_hex` is that MAC, compared in constant time |
+| `constant_time_equal(a: text, b: text) -> boolean` | equality whose time depends on the length only — for MACs, tokens and digests, never `==` |
+
+### Passwords — Argon2id (RFC 9106)
+
+| Function | Returns |
+|---|---|
+| `password_hash(password: text) -> text` | a PHC string `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>` with a fresh 16-byte salt; store this |
+| `password_verify(password: text, stored: text) -> boolean` | `true` iff `password` made `stored`; reads the cost from it (up to 1 GiB, 64 passes, 16 lanes) |
 
 ### Base64 & raw bytes
 
@@ -71,7 +80,7 @@ Every function fails **soft**: malformed input returns `""` (or `false` for
 
 | Function | Returns |
 |---|---|
-| `x25519_dh(secret_key_b64, public_key_b64) -> text` | 32-byte X25519 shared secret (RFC 7748) |
+| `x25519_dh(secret_key_b64, public_key_b64) -> text` | 32-byte X25519 shared secret (RFC 7748); `""` for a small-order public key, whose result is all zeros |
 | `ed25519_public_key(secret_key_b64) -> text` | 32-byte public key; `""` if the seed ≠ 32 bytes |
 | `ed25519_sign(secret_key_b64, message_b64) -> text` | 64-byte signature (RFC 8032; secret = 32-byte seed) |
 | `ed25519_verify(public_key_b64, message_b64, signature_b64) -> boolean` | `true` iff valid; `false` on any malformed input |
