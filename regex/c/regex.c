@@ -786,14 +786,33 @@ static rx_prog *rx_compile(const char *pattern) {
     return p;
 }
 
-/* ── The matcher: recursive backtracking with capture restore ───────────────────────────── */
+/* ── The matcher: backtracking with capture restore, its state on the heap ──────────────── */
 
 #define RX_STEP_LIMIT 20000000L
-/* The matcher recurses once per repetition it is inside, so the input decides how deep it goes:
- * a run of 80,000 characters under `\w+` ended the process with a stack overflow.  Past this
- * depth an attempt gives up, as it does past the step limit — 50,000 is below where an 8 MiB
- * stack ran out, and above every length that matched before. */
-#define RX_DEPTH_LIMIT 50000L
+/* The matcher keeps what it may have to come back to — a place to try next, and what to put
+ * back first — on two lists of its own instead of on the call stack, so how deep a match goes
+ * is a matter of memory it asks for, not of the stack it happens to run on: a thread with a
+ * small stack matches what the main thread matches.  An attempt that would need more than
+ * these gives up, as it does past the step limit. */
+#define RX_CHOICE_LIMIT 500000L
+#define RX_TRAIL_LIMIT 2000000L
+
+/* A place to come back to when the path taken fails. */
+typedef struct {
+    int kind;                 /* RX_C_* */
+    int pc;
+    const unsigned char *pos;
+    const unsigned char *start; /* RX_C_ATOM_GREEDY: where the run began */
+    long count;               /* RX_C_ATOM_*: characters of the run taken so far */
+    long trail;               /* the trail's length when this was pushed */
+} rx_choice;
+#define RX_C_ALT 0            /* go on at `pc`, `pos` */
+#define RX_C_ITERATE 1        /* a lazy repetition's end at `pc`: take one more iteration */
+#define RX_C_ATOM_GREEDY 2    /* a one-character run: give one character back, go on at `pc` */
+#define RX_C_ATOM_LAZY 3      /* a one-character run at `pc`: take one more, go on after it */
+
+/* A value to put back: which array (0 caps, 1 counters, 2 lastpos), where, and what it held. */
+typedef struct { int which, at; long old; } rx_undo;
 
 typedef struct {
     const rx_prog *p;
@@ -802,8 +821,11 @@ typedef struct {
     int *counters;
     long *lastpos;    /* per counter: where the current iteration began */
     long steps;
-    long depth;
     int gave_up;
+    rx_choice *choices;
+    long nchoices, cchoices;
+    rx_undo *trail;
+    long ntrail, ctrail;
 } rx_run;
 
 static int rx_class_has(const rx_class *c, uint32_t ch) {
@@ -849,112 +871,175 @@ static int rx_word_before(rx_run *r, const unsigned char *pos) {
     return rx_is_word(rx_decode(q, r->end, &len));
 }
 
-static int rx_step(rx_run *r, int pc, const unsigned char *pos);
-static int rx_step_at(rx_run *r, int pc, const unsigned char *pos);
-
-static int rx_step(rx_run *r, int pc, const unsigned char *pos) {
-    int ok;
-    if (r->depth >= RX_DEPTH_LIMIT) { r->gave_up = 1; return 0; }
-    r->depth++;
-    ok = rx_step_at(r, pc, pos);
-    r->depth--;
-    return ok;
+/* The bytes the one-character instruction `i` takes at `pos`, 0 when it does not match there. */
+static int rx_atom(rx_run *r, const rx_inst *i, const unsigned char *pos) {
+    int len;
+    uint32_t c;
+    if (pos >= r->end) return 0;
+    c = rx_decode(pos, r->end, &len);
+    switch (i->op) {
+    case RX_CHAR:
+        if (i->x) c = rx_fold(c);
+        return c == (uint32_t) i->a ? len : 0;
+    case RX_ANY:
+        return (c == '\n' && !i->a) ? 0 : len;
+    case RX_CLASS:
+        return rx_class_has(&r->p->classes[i->a], c) ? len : 0;
+    default:
+        return 0;
+    }
 }
 
-static int rx_step_at(rx_run *r, int pc, const unsigned char *pos) {
+/* A new place to come back to; NULL when the attempt gives up for want of room. */
+static rx_choice *rx_push(rx_run *r, int kind, int pc, const unsigned char *pos) {
+    rx_choice *c;
+    if (r->nchoices == r->cchoices) {
+        long cap = r->cchoices ? r->cchoices * 2 : 64;
+        rx_choice *grown = cap > RX_CHOICE_LIMIT ? NULL : (rx_choice *) realloc(r->choices, (size_t) cap * sizeof(rx_choice));
+        if (!grown) { r->gave_up = 1; return NULL; }
+        r->choices = grown;
+        r->cchoices = cap;
+    }
+    c = &r->choices[r->nchoices++];
+    c->kind = kind;
+    c->pc = pc;
+    c->pos = pos;
+    c->start = pos;
+    c->count = 0;
+    c->trail = r->ntrail;
+    return c;
+}
+
+/* Remember what `which[at]` holds, to put it back when the path fails.  With nothing to come
+ * back to there is nothing to put back.  0 when the attempt gives up for want of room. */
+static int rx_keep(rx_run *r, int which, int at, long old) {
+    if (r->nchoices == 0) return 1;
+    if (r->ntrail == r->ctrail) {
+        long cap = r->ctrail ? r->ctrail * 2 : 64;
+        rx_undo *grown = cap > RX_TRAIL_LIMIT ? NULL : (rx_undo *) realloc(r->trail, (size_t) cap * sizeof(rx_undo));
+        if (!grown) { r->gave_up = 1; return 0; }
+        r->trail = grown;
+        r->ctrail = cap;
+    }
+    r->trail[r->ntrail].which = which;
+    r->trail[r->ntrail].at = at;
+    r->trail[r->ntrail].old = old;
+    r->ntrail++;
+    return 1;
+}
+
+static void rx_undo_to(rx_run *r, long mark) {
+    while (r->ntrail > mark) {
+        const rx_undo *u = &r->trail[--r->ntrail];
+        if (u->which == 0) r->caps[u->at] = u->old;
+        else if (u->which == 1) r->counters[u->at] = (int) u->old;
+        else r->lastpos[u->at] = u->old;
+    }
+}
+
+/* One more iteration of the repetition whose end is at `pc`, from `pos`. */
+static int rx_iterate(rx_run *r, int pc, const unsigned char *pos) {
+    const rx_inst *i = &r->p->code[pc];
+    if (!rx_keep(r, 1, i->a, r->counters[i->a]) || !rx_keep(r, 2, i->a, r->lastpos[i->a])) return 0;
+    r->counters[i->a]++;
+    r->lastpos[i->a] = (long) (pos - r->in);
+    return 1;
+}
+
+/* Whether the program matches from instruction 0 at `pos`. */
+static int rx_step(rx_run *r, const unsigned char *pos) {
+    int pc = 0;
+    r->nchoices = 0;
+    r->ntrail = 0;
     for (;;) {
         const rx_inst *i;
+        int failed = 0;
         if (++r->steps > RX_STEP_LIMIT) { r->gave_up = 1; return 0; }
         i = &r->p->code[pc];
         switch (i->op) {
-        case RX_CHAR: {
-            int len;
-            uint32_t c;
-            if (pos >= r->end) return 0;
-            c = rx_decode(pos, r->end, &len);
-            if (i->x) c = rx_fold(c);
-            if (c != (uint32_t) i->a) return 0;
-            pos += len;
-            pc++;
-            break;
-        }
-        case RX_ANY: {
-            int len;
-            uint32_t c;
-            if (pos >= r->end) return 0;
-            c = rx_decode(pos, r->end, &len);
-            if (c == '\n' && !i->a) return 0;
-            pos += len;
-            pc++;
-            break;
-        }
+        case RX_CHAR:
+        case RX_ANY:
         case RX_CLASS: {
-            int len;
-            uint32_t c;
-            if (pos >= r->end) return 0;
-            c = rx_decode(pos, r->end, &len);
-            if (!rx_class_has(&r->p->classes[i->a], c)) return 0;
+            int len = rx_atom(r, i, pos);
+            if (!len) { failed = 1; break; }
             pos += len;
             pc++;
             break;
         }
         case RX_SPLIT:
-            if (rx_step(r, i->x, pos)) return 1;
-            if (r->gave_up) return 0;
-            pc = i->y;
+            if (!rx_push(r, RX_C_ALT, i->y, pos)) return 0;
+            pc = i->x;
             break;
         case RX_JMP:
             pc = i->x;
             break;
-        case RX_SAVE: {
-            long old = r->caps[i->a];
+        case RX_SAVE:
+            if (!rx_keep(r, 0, i->a, r->caps[i->a])) return 0;
             r->caps[i->a] = (long) (pos - r->in);
-            if (rx_step(r, pc + 1, pos)) return 1;
-            r->caps[i->a] = old;
-            return 0;
-        }
-        case RX_BOL:
-            if (pos != r->in && pos[-1] != '\n') return 0;
             pc++;
+            break;
+        case RX_BOL:
+            if (pos != r->in && pos[-1] != '\n') failed = 1;
+            else pc++;
             break;
         case RX_EOL:
-            if (pos != r->end && *pos != '\n') return 0;
-            pc++;
+            if (pos != r->end && *pos != '\n') failed = 1;
+            else pc++;
             break;
         case RX_BOT:
-            if (pos != r->in) return 0;
-            pc++;
+            if (pos != r->in) failed = 1;
+            else pc++;
             break;
         case RX_EOT:
-            if (pos != r->end) return 0;
-            pc++;
+            if (pos != r->end) failed = 1;
+            else pc++;
             break;
         case RX_WORDB:
-            if (rx_word_before(r, pos) == rx_word_at(r, pos)) return 0;
-            pc++;
+            if (rx_word_before(r, pos) == rx_word_at(r, pos)) failed = 1;
+            else pc++;
             break;
         case RX_NWORDB:
-            if (rx_word_before(r, pos) != rx_word_at(r, pos)) return 0;
-            pc++;
+            if (rx_word_before(r, pos) != rx_word_at(r, pos)) failed = 1;
+            else pc++;
             break;
         case RX_REPSTART: {
+            const rx_inst *atom = &r->p->code[pc + 1], *end = &r->p->code[pc + 2];
+            int k = pc + 1, depth = 1;
+            if ((atom->op == RX_CHAR || atom->op == RX_ANY || atom->op == RX_CLASS) && end->op == RX_REPEND) {
+                /* A repetition of ONE character instruction (`\w+`, `.*`, `x*?`) is walked as
+                 * a run: greedy takes all it can and gives characters back one at a time,
+                 * lazy takes the fewest and takes one more at a time. */
+                int min = i->x, max = i->y, len;
+                long count = 0;
+                const unsigned char *p = pos;
+                while ((end->y ? (max < 0 || count < max) : count < min) && (len = rx_atom(r, atom, p)) != 0) {
+                    if (++r->steps > RX_STEP_LIMIT) { r->gave_up = 1; return 0; }
+                    p += len;
+                    count++;
+                }
+                if (count < min) { failed = 1; break; }
+                if (end->y ? count > min : (max < 0 || count < max)) {
+                    rx_choice *c = rx_push(r, end->y ? RX_C_ATOM_GREEDY : RX_C_ATOM_LAZY, end->y ? pc + 3 : pc, p);
+                    if (!c) return 0;
+                    c->start = pos;
+                    c->count = end->y ? count - min : count;
+                }
+                pos = p;
+                pc += 3;
+                break;
+            }
             /* enter the repetition: no iteration yet, no position to compare; the REPEND past
              * the body decides whether to iterate */
-            int old = r->counters[i->a];
-            long oldpos = r->lastpos[i->a];
-            int ok;
-            int k = pc + 1, depth = 1;
             while (depth) {
                 if (r->p->code[k].op == RX_REPSTART) depth++;
                 else if (r->p->code[k].op == RX_REPEND) depth--;
                 if (depth) k++;
             }
+            if (!rx_keep(r, 1, i->a, r->counters[i->a]) || !rx_keep(r, 2, i->a, r->lastpos[i->a])) return 0;
             r->counters[i->a] = 0;
             r->lastpos[i->a] = -1;
-            ok = rx_step(r, k, pos);
-            r->counters[i->a] = old;
-            r->lastpos[i->a] = oldpos;
-            return ok;
+            pc = k;
+            break;
         }
         case RX_REPEND: {
             /* `count` iterations of the body are behind us: another one is allowed below the
@@ -967,34 +1052,77 @@ static int rx_step_at(rx_run *r, int pc, const unsigned char *pos) {
             long here = (long) (pos - r->in);
             int can_stop = count >= min;
             int can_go = (max < 0 || count < max) && (count == 0 || r->lastpos[i->a] != here);
-            int ok;
             if (!can_go) {
-                if (!can_stop) return 0;
-                pc++;
+                if (!can_stop) failed = 1;
+                else pc++;
                 break;
             }
-            if (i->y) {
-                r->counters[i->a] = count + 1;
-                r->lastpos[i->a] = here;
-                ok = rx_step(r, i->x, pos);
-                r->counters[i->a] = count;
-                if (ok) return 1;
-                if (r->gave_up || !can_stop) return 0;
-                pc++;
+            if (i->y || !can_stop) {
+                /* iterate now; stopping here stays open when it is allowed */
+                if (can_stop && !rx_push(r, RX_C_ALT, pc + 1, pos)) return 0;
+                if (!rx_iterate(r, pc, pos)) return 0;
+                pc = i->x;
                 break;
             }
-            if (can_stop && rx_step(r, pc + 1, pos)) return 1;
-            if (r->gave_up) return 0;
-            r->counters[i->a] = count + 1;
-            r->lastpos[i->a] = here;
-            ok = rx_step(r, i->x, pos);
-            r->counters[i->a] = count;
-            return ok;
+            /* lazy: stop now; one more iteration stays open */
+            if (!rx_push(r, RX_C_ITERATE, pc, pos)) return 0;
+            pc++;
+            break;
         }
         case RX_MATCH:
             return 1;
         default:
-            return 0;
+            failed = 1;
+            break;
+        }
+        /* The path failed: back to the last place left open, with everything since put back. */
+        while (failed) {
+            rx_choice *c;
+            if (r->nchoices == 0) return 0;
+            c = &r->choices[r->nchoices - 1];
+            rx_undo_to(r, c->trail);
+            switch (c->kind) {
+            case RX_C_ALT:
+                pc = c->pc;
+                pos = c->pos;
+                r->nchoices--;
+                failed = 0;
+                break;
+            case RX_C_ITERATE:
+                pc = c->pc;
+                pos = c->pos;
+                r->nchoices--;
+                if (!rx_iterate(r, pc, pos)) return 0;
+                pc = r->p->code[pc].x;
+                failed = 0;
+                break;
+            case RX_C_ATOM_GREEDY: {
+                /* one character back: to the start of the code point before it */
+                const unsigned char *p = c->pos;
+                if (p <= c->start) { r->nchoices--; break; }
+                p--;
+                while (p > c->start && rx_is_cont(*p)) p--;
+                c->pos = p;
+                pc = c->pc;
+                pos = p;
+                if (--c->count <= 0) r->nchoices--;
+                failed = 0;
+                break;
+            }
+            default: { /* RX_C_ATOM_LAZY */
+                const rx_inst *rep = &r->p->code[c->pc];
+                int len = rx_atom(r, &r->p->code[c->pc + 1], c->pos);
+                if (!len) { r->nchoices--; break; }
+                if (++r->steps > RX_STEP_LIMIT) { r->gave_up = 1; return 0; }
+                c->pos += len;
+                c->count++;
+                pc = c->pc + 3;
+                pos = c->pos;
+                if (rep->y >= 0 && c->count >= rep->y) r->nchoices--;
+                failed = 0;
+                break;
+            }
+            }
         }
     }
 }
@@ -1014,13 +1142,16 @@ static int rx_search(const rx_prog *p, const unsigned char *in, size_t n, size_t
     r.counters = (int *) calloc((size_t) p->ncounters + 1, sizeof(int));
     r.lastpos = (long *) calloc((size_t) p->ncounters + 1, sizeof(long));
     r.steps = 0;
-    r.depth = 0;
     r.gave_up = 0;
+    r.choices = NULL;
+    r.nchoices = r.cchoices = 0;
+    r.trail = NULL;
+    r.ntrail = r.ctrail = 0;
     if (!r.counters || !r.lastpos) { free(r.counters); free(r.lastpos); return 0; }
     for (start = from; start <= n; ) {
         int k, len;
         for (k = 0; k < ncaps; k++) caps[k] = -1;
-        if (rx_step(&r, 0, in + start)) { free(r.counters); free(r.lastpos); return 1; }
+        if (rx_step(&r, in + start)) { free(r.counters); free(r.lastpos); free(r.choices); free(r.trail); return 1; }
         if (r.gave_up) break;
         if (start >= n) break;
         rx_decode(in + start, in + n, &len);
@@ -1028,6 +1159,8 @@ static int rx_search(const rx_prog *p, const unsigned char *in, size_t n, size_t
     }
     free(r.counters);
     free(r.lastpos);
+    free(r.choices);
+    free(r.trail);
     return 0;
 }
 
