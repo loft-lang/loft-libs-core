@@ -23,6 +23,12 @@ Three tiers, and choosing between them is the whole decision:
   remainder, which the global tier pays per draw).  Owned streams and a shared
   one, as above.  Its own generator: a seed does not reproduce `rand`'s sequence.
 
+**Not for secrets.**  None of the three tiers is a cryptographic generator: each is seeded
+from a value a program can guess (the global tier starts at `12345`), and its next output
+follows from the ones already seen.  A key, a token, a session id, a password-reset code, a
+nonce or a salt comes from `crypto::random_bytes`, which reads the operating system's
+generator.
+
 ## Install
 
 ```sh
