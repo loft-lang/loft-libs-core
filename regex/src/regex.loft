@@ -37,9 +37,14 @@
 
 // --- Internal natives (the C99 engine in c/regex.c, a `[c] shim`) ---
 //
-// The engine is bound by `#c`: a text crosses as a NUL-terminated C string, a
-// `vector<integer>` as its element pointer and count, so the spans come back
+// The engine is bound by `#c`: a text crosses as a C string, a `vector<integer>`
+// as its element pointer and count, so the spans come back
 // into a buffer this side sizes from the pattern's group count.
+
+// The INPUT also crosses with its byte count (`size(input)`): a text may hold a
+// NUL, and the engine must match against all of it, not the part before one.
+// The PATTERN crosses as a C string only, so a pattern ends at a NUL it holds;
+// write `\x00` in a pattern to match one.
 
 // The number of capture groups of `pattern`; -1 when it does not compile.
 fn group_count(pattern: text) -> integer;
@@ -48,21 +53,33 @@ fn group_count(pattern: text) -> integer;
 // The spans of the first match at or after byte `from` written into `out`
 // (`s0 e0 s1 e1 …`, -1 -1 for a group that took no part); the count written,
 // 0 when nothing matched or the pattern is invalid.
-fn spans_into(pattern: text, input: text, from: integer, out: vector<integer>) -> integer;
-#c "rx_spans" "int64_t(const char*, const char*, int64_t, int64_t*, int64_t)"
+fn spans_raw(pattern: text, input: text, n: integer, from: integer, out: vector<integer>) -> integer;
+#c "rx_spans" "int64_t(const char*, const char*, int64_t, int64_t, int64_t*, int64_t)"
+
+fn spans_into(pattern: text, input: text, from: integer, out: vector<integer>) -> integer {
+  spans_raw(pattern, input, size(input), from, out)
+}
 
 // True if `pattern` matches anywhere in `input`.
-fn is_match_raw(pattern: text, input: text) -> integer;
-#c "rx_is_match" "int64_t(const char*, const char*)"
+fn is_match_raw(pattern: text, input: text, n: integer) -> integer;
+#c "rx_is_match" "int64_t(const char*, const char*, int64_t)"
 
 // The START of the first match at or after byte `from`, with the whole input
 // as context — `^` and `\b` see the bytes before `from` — or null.
-fn match_start_at(pattern: text, input: text, from: integer) -> integer;
-#c "rx_match_start_at" "int64_t(const char*, const char*, int64_t)"
+fn match_start_raw(pattern: text, input: text, n: integer, from: integer) -> integer;
+#c "rx_match_start_at" "int64_t(const char*, const char*, int64_t, int64_t)"
+
+fn match_start_at(pattern: text, input: text, from: integer) -> integer {
+  match_start_raw(pattern, input, size(input), from)
+}
 
 // The END of that same match, or null.
-fn match_end_at(pattern: text, input: text, from: integer) -> integer;
-#c "rx_match_end_at" "int64_t(const char*, const char*, int64_t)"
+fn match_end_raw(pattern: text, input: text, n: integer, from: integer) -> integer;
+#c "rx_match_end_at" "int64_t(const char*, const char*, int64_t, int64_t)"
+
+fn match_end_at(pattern: text, input: text, from: integer) -> integer {
+  match_end_raw(pattern, input, size(input), from)
+}
 
 // The group names of `pattern`, each preceded by `\n`: one unnamed group is
 // `"\n"`, no group at all is `""`.
@@ -75,7 +92,7 @@ fn pattern_error(pattern: text) -> text;
 #c "rx_error" "const char*(const char*)"
 
 fn is_match(pattern: text, input: text) -> boolean {
-  is_match_raw(pattern, input) != 0
+  is_match_raw(pattern, input, size(input)) != 0
 }
 
 fn match_start(pattern: text, input: text) -> integer {

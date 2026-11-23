@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // --- Random ---
-// Random number generation functions.
+// Random number generation functions, for games, simulations and sampling.  NOT for secrets:
+// every generator here is predictable from its seed and its earlier output, so a key, a token,
+// a session id, a nonce or a salt comes from `crypto::random_bytes` instead.
 
 // Returns a random integer in [lo, hi] (inclusive).
 // Returns null when lo > hi or when either argument is null.

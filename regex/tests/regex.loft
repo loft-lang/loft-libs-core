@@ -101,16 +101,65 @@ fn test_an_empty_match_steps_a_whole_character() {
   assert(n == 4, "one empty match per boundary: {n}");
 }
 
-// The matcher goes one call deeper per repetition, so the input decides its depth.  A run that
-// fits matches as before; a run of 200,000 characters is given up on (no match) where it used
-// to end the process with a stack overflow.
-fn test_a_long_run_is_given_up_on_not_a_crash() {
-  short = "";
-  for _ in 0..20000 { short += "a"; }
-  assert(short.matches("^\\w+$"), "20,000 characters match");
-  long = short;
-  for _ in 0..9 { long += short; }
+// The matcher keeps what it may have to come back to on lists of its own, not on the call
+// stack, so the length of the input does not decide how much stack a match takes: a run of
+// 200,000 characters matches, under a single-character repetition and under a grouped one,
+// where the first ended the process with a stack overflow and then was given up on.  A match
+// that would need more room than the matcher allows itself is given up on — it answers no
+// match — and the next match is unaffected.
+fn test_a_long_input_matches_and_does_not_overflow() {
+  long = "";
+  for _ in 0..100000 { long += "ab"; }
   assert(len(long) == 200000, "the long run is 200,000 characters, not {len(long)}");
-  assert(!long.matches("^\\w+$"), "200,000 characters are given up on");
+  assert(long.matches("^\\w+$"), "200,000 characters match a single-character repetition");
+  assert(long.matches("^(ab)+$"), "and a grouped one");
+  assert(!long.matches("^(ab)+a$"), "which gives every pair back before it answers no");
+  m = long.capture("^(\\w*)b$");
+  assert(m != null && m.end == 200000, "a greedy run gives one character back");
+  assert(len("{m.group(1)}") == 199999, "and its group is the rest");
+  // Two places left open per character: more than the matcher keeps, so it gives up.
+  assert(!long.matches("^(a|b)*$"), "a match past the matcher's room answers no match");
   assert("after".matches("^\\w+$"), "and the next match is unaffected");
+}
+
+// The answers the recursive matcher gave, kept: what a repetition takes and gives back, with
+// each group's span.  Hand-computed, leftmost match first, greedy longest and lazy shortest.
+fn test_what_a_repetition_takes_and_gives_back() {
+  m = "aaaa".capture("(a+)(a+)");
+  assert("{m.group(1)}" == "aaa" && "{m.group(2)}" == "a", "greedy takes all but one: {m.group(1)} {m.group(2)}");
+  m = "aaaa".capture("(a+?)(a+)");
+  assert("{m.group(1)}" == "a" && "{m.group(2)}" == "aaa", "lazy takes one: {m.group(1)} {m.group(2)}");
+  m = "aaaa".capture("a{{2,3}}");
+  assert(m.start == 0 && m.end == 3, "a bounded run stops at its maximum: {m.end}");
+  m = "aaaa".capture("a{{2,3}}?");
+  assert(m.end == 2, "and a lazy one at its minimum: {m.end}");
+  assert("aaab".matches("^a*ab$"), "a greedy run gives back what the rest needs");
+  m = "ééé".capture("(é+)é");
+  assert(m.start == 0 && m.end == 6 && "{m.group(1)}" == "éé", "a character given back is a whole character");
+  m = "1,22,333,4".capture("(\\d+,)+");
+  assert(m.end == 9 && "{m.group(1)}" == "333,", "a grouped repetition keeps its last iteration: {m.group(1)}");
+  assert(!"abab".matches("(a|b)*c"), "every alternative is tried and none is left");
+  // A repetition whose body may match nothing still ends, and still finds a later match: the
+  // recursive matcher answered no match here, having kept where a failed iteration began.
+  assert("a,b,,c".search("(a*)+b") == 2, "the match at byte 2 is found");
+  m = "aéb".capture("(a*)+b");
+  assert(m != null && m.start == 3 && m.end == 4, "and the one after a two-byte character");
+}
+
+// A text may hold a NUL byte, and the input is matched to its end, not to the NUL: a
+// pattern that vets a whole text (`^…$`) must see the part after one.
+fn test_the_input_is_matched_past_a_nul() {
+  assert("abc".matches("^[a-z0-9]+$"), "the plain text matches");
+  assert(!"abc\0<script>".matches("^[a-z0-9]+$"), "a NUL does not end the vetted text");
+  assert("ab\0cd9".search("9") == 5, "a match after the NUL is found at byte 5");
+  m = "ab\0cd".capture("[a-z]+$");
+  assert(m != null, "the end anchor is the end of the text");
+  assert(m.start == 3 && m.end == 5, "the tail is bytes 3..5, not {m.start}..{m.end}");
+  assert("{m.group(0)}" == "cd", "and reads cd");
+  assert("a\0b".matches("^a\\x00b$"), "a pattern names a NUL as \\x00");
+  assert("ax\0bxc".replace_on("x", "Y") == "aY\0bYc", "every match is replaced, on both sides of a NUL");
+  assert(len("a\0a".capture_all("a")) == 2, "both matches are found");
+  parts = 0;
+  for _ in "a,b\0,c".split_on(",") { parts += 1; }
+  assert(parts == 3, "the text splits at both commas, into {parts}");
 }
