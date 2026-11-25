@@ -64,7 +64,7 @@ Every function fails **soft**: malformed input returns `""` (or `false` for
 | Function | Returns |
 |---|---|
 | `password_hash(password: text) -> text` | a PHC string `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>` with a fresh 16-byte salt; store this |
-| `password_verify(password: text, stored: text) -> boolean` | `true` iff `password` made `stored`; reads the cost from it (up to 1 GiB, 64 passes, 16 lanes) |
+| `password_verify(password: text, stored: text) -> boolean` | `true` iff `password` made `stored`; reads the cost from it (up to 256 MiB, 10 passes, 16 lanes) |
 
 ### Base64 & raw bytes
 

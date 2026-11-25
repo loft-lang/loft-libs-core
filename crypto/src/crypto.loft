@@ -498,9 +498,11 @@ pub fn random_bytes(length: integer) -> text {
 // hashes made with other costs still verify.
 
 // The parameters `password_verify` accepts from a stored hash: a hash that names more is refused
-// rather than run, so a stored text cannot make one check take a gigabyte or a minute.
+// rather than run, so a stored text cannot make one check take a gigabyte or a minute.  256 MiB
+// and ten passes hold what the common Argon2 tools write (RFC 9106's 64 MiB at three passes,
+// libsodium's "moderate" 256 MiB at three) with room above them.
 fn argon2_cost_ok(kib: integer, passes: integer, lanes: integer) -> boolean {
-  lanes >= 1 && lanes <= 16 && passes >= 1 && passes <= 64 && kib >= 8 * lanes && kib <= 1048576
+  lanes >= 1 && lanes <= 16 && passes >= 1 && passes <= 10 && kib >= 8 * lanes && kib <= 262144
 }
 
 // The `olen`-byte Argon2id of `password` under `salt`, or null when a parameter is out of range.

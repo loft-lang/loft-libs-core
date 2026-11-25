@@ -258,7 +258,7 @@ int cr_argon2id(const void *pass, int64_t plen, const void *salt, int64_t slen, 
     crypto_argon2_config config;
     crypto_argon2_inputs inputs;
     uintptr_t at = (uintptr_t) work;
-    if (lanes < 1 || lanes > 16 || passes < 1 || passes > 64 || kib < 8 * lanes || kib > 1048576) return 0;
+    if (lanes < 1 || lanes > 16 || passes < 1 || passes > 10 || kib < 8 * lanes || kib > 262144) return 0;
     if (slen < 8 || slen > 64 || plen < 0 || plen > 0xffffffffL || olen < 4 || olen > 64) return 0;
     if (wlen < kib * 1024 + 8) return 0;
     at = (at + 7) & ~(uintptr_t) 7;
